@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   eventToBinding,
+  firesWhileTyping,
   formatBinding,
   isCompleteBinding,
   matchesBinding,
@@ -91,5 +92,25 @@ describe("toAccelerator", () => {
   test("refuses anything the menu bar cannot express", () => {
     expect(toAccelerator("mod")).toBeNull();
     expect(toAccelerator("")).toBeNull();
+  });
+});
+
+describe("firesWhileTyping", () => {
+  // The defaults all carry one of these, which is the point: nothing about
+  // them changes, and a rebind to something lighter stops reaching into a
+  // filename somebody is in the middle of typing.
+  test("a chord held with Cmd or Ctrl is not typing", () => {
+    expect(firesWhileTyping("mod+s")).toBe(true);
+    expect(firesWhileTyping("mod+shift+f")).toBe(true);
+    expect(firesWhileTyping("ctrl+tab")).toBe(true);
+    expect(firesWhileTyping("mod+alt+arrowright")).toBe(true);
+  });
+
+  test("everything else is something somebody might be typing", () => {
+    expect(firesWhileTyping("p")).toBe(false);
+    expect(firesWhileTyping("shift+p")).toBe(false);
+    expect(firesWhileTyping("alt+p")).toBe(false);
+    expect(firesWhileTyping("alt+shift+p")).toBe(false);
+    expect(firesWhileTyping("")).toBe(false);
   });
 });
