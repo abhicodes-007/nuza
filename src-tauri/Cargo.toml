@@ -43,6 +43,9 @@ notify = "8"
 percent-encoding = "2"
 http-range = "0.1"
 tauri-utils = "2"
+# `oneshot`, so a command waiting on a file dialog yields its thread rather
+# than parking it for as long as the dialog is open - see `wait_for_picker`.
+tokio = { version = "1", features = ["sync"] }
 
 # A rename that refuses to replace what is already there. Every platform has
 # one and none of them is `fs::rename`, which is why these are here.
