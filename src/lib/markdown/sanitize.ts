@@ -105,14 +105,90 @@ const ALLOWED_ATTRIBUTES = new Set([
 const URL_ATTRIBUTES = new Set(["href", "src", "poster"]);
 
 /**
+ * Properties a note may set on its own HTML.
+ *
  * Inline CSS cannot run script, but it can lift an element out of the flow and
- * cover the window. Declarations that position, import or fetch are dropped;
- * ordinary colour and spacing rules pass.
+ * cover the window - `position:fixed;inset:0` over the editor, with the note's
+ * own content on top of it. This used to be a pattern match for the properties
+ * worth worrying about, which is the wrong way round twice over. It missed
+ * `transform`, `inset`, `z-index` and a negative `margin`, all of which move an
+ * element just as well as `position` does; and the match itself could be walked
+ * past, because a style attribute may carry CSS comments, and a declaration
+ * opening with an empty one does not begin where the pattern expected it to.
+ *
+ * So the names are listed instead. Anything not here does not survive, whatever
+ * it is spelled like, and a property that ought to be allowed is one line to
+ * add. Nothing that sizes, places or layers an element is on the list.
  */
-const UNSAFE_STYLE = /(^|[;\s])(position|behavior)\s*:|url\s*\(|expression\s*\(|@import|javascript:/i;
+const SAFE_PROPERTIES = new Set([
+  "background-color",
+  "border",
+  "border-bottom",
+  "border-collapse",
+  "border-color",
+  "border-left",
+  "border-radius",
+  "border-right",
+  "border-spacing",
+  "border-style",
+  "border-top",
+  "border-width",
+  "color",
+  "font-family",
+  "font-size",
+  "font-style",
+  "font-variant",
+  "font-weight",
+  "letter-spacing",
+  "line-height",
+  "list-style-type",
+  "padding",
+  "padding-bottom",
+  "padding-left",
+  "padding-right",
+  "padding-top",
+  "text-align",
+  "text-decoration",
+  "text-transform",
+  "vertical-align",
+  "white-space",
+  "word-break",
+]);
 
+/**
+ * A value that reaches outside the note even on a property that is allowed:
+ * `url()` and `@import` fetch, and a backslash or a comment is how a value gets
+ * written as something other than what it reads as.
+ */
+const UNSAFE_VALUE = /url\s*\(|expression\s*\(|@import|javascript:|\\|\/\*/i;
+
+/**
+ * The declarations of `value` that are allowed, or `null` if none are - in
+ * which case the attribute is left off entirely rather than set to "".
+ *
+ * Split by hand rather than by handing the string to the browser: a parser that
+ * understands CSS comments and escapes is a parser that can be talked into
+ * disagreeing with the one that reads the result. Splitting on `;` and the
+ * first `:` can only ever produce a property name that is not on the list,
+ * which is dropped.
+ */
 function sanitizeStyle(value: string) {
-  return UNSAFE_STYLE.test(value) ? null : value;
+  const kept: string[] = [];
+
+  for (const declaration of value.split(";")) {
+    const colon = declaration.indexOf(":");
+    if (colon === -1) continue;
+
+    const property = declaration.slice(0, colon).trim().toLowerCase();
+    const setting = declaration.slice(colon + 1).trim();
+
+    if (!SAFE_PROPERTIES.has(property)) continue;
+    if (!setting || UNSAFE_VALUE.test(setting)) continue;
+
+    kept.push(`${property}: ${setting}`);
+  }
+
+  return kept.length ? kept.join("; ") : null;
 }
 
 function sanitizeUrl(name: string, value: string, directory: string) {
