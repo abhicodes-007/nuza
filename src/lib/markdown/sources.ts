@@ -38,6 +38,17 @@ export function resolveRelativePath(directory: string, relative: string) {
   return segments.join(separator);
 }
 
+/**
+ * The scheme a note's own images and video are served over, matching
+ * `MEDIA_PROTOCOL` in `src-tauri/src/lib.rs`.
+ *
+ * Not Tauri's asset protocol, which is scoped by a list of directories that
+ * only grows: every vault opened since launch stays on it, and nothing can be
+ * taken off it. This one is handled by the app, which answers each request by
+ * asking whether the file is inside the folder that is open right now.
+ */
+const MEDIA_PROTOCOL = "nuza-media";
+
 /** URL schemes we are willing to hand to the OS or to an `<img>` element. */
 const WEB_URL = /^https?:\/\//i;
 const DATA_IMAGE = /^data:image\/[a-z0-9.+-]+;/i;
@@ -75,7 +86,7 @@ export function resolveImageSource(url: string, directory: string) {
     // A path with a stray `%` is not valid percent-encoding; use it verbatim.
   }
 
-  return convertFileSrc(resolveRelativePath(directory, decoded));
+  return convertFileSrc(resolveRelativePath(directory, decoded), MEDIA_PROTOCOL);
 }
 
 /** The directory part of a file path, for either separator style. */

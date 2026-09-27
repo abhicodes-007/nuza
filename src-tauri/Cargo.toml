@@ -18,7 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
+# No "protocol-asset": a note's media goes over nuza-media:// instead, which
+# is scoped to the open folder rather than to every folder ever opened.
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -35,6 +37,12 @@ tempfile = "3"
 # Notices a note being changed underneath the app - by a sync client, a
 # git checkout, or another editor.
 notify = "8"
+# Serving the images and video a note points at, over nuza-media:// rather
+# than through Tauri's asset protocol - see `serve_media`. All three already
+# came in under tauri; these are the same versions, asked for by name.
+percent-encoding = "2"
+http-range = "0.1"
+tauri-utils = "2"
 
 # A rename that refuses to replace what is already there. Every platform has
 # one and none of them is `fs::rename`, which is why these are here.
