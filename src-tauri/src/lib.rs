@@ -288,11 +288,6 @@ fn adopt_folder(app_handle: &tauri::AppHandle, path: String) -> Result<OpenedFol
         return Err(format!("\"{}\" is not there any more", path));
     }
 
-    app_handle
-        .asset_protocol_scope()
-        .allow_directory(&path, true)
-        .map_err(|e| e.to_string())?;
-
     // The one place the boundary is set. Resolved here so that every later
     // check is a comparison between two paths the OS has already agreed on.
     let resolved = directory.canonicalize().map_err(|e| e.to_string())?;
@@ -312,6 +307,147 @@ fn adopt_folder(app_handle: &tauri::AppHandle, path: String) -> Result<OpenedFol
 
     let entries = read_dir_recursive(directory)?;
     Ok(OpenedFolder { path, entries })
+}
+
+/// The scheme a note's images and video are served over.
+///
+/// Tauri's asset protocol was doing this, and its scope is a list of allowed
+/// directories that only ever grows: every vault opened since launch stays on
+/// it, so a note in the vault open now could reach into one closed an hour
+/// ago - the opposite of what the comment on `Vault` says this app does.
+///
+/// Nothing can be taken off that list, either. `forbid_directory` does not
+/// undo `allow_directory`; it adds to a second list that wins permanently, so
+/// revoking a vault on the way out would quietly stop its images loading if
+/// it were ever opened again.
+///
+/// So media does not go through that protocol at all. This one asks
+/// `within_vault` - the same question, of the same function, that every
+/// filesystem command here asks - which makes the boundary one answer rather
+/// than a list that drifts away from it.
+const MEDIA_PROTOCOL: &str = "nuza-media";
+
+/// The file a `nuza-media://` request is asking for.
+///
+/// `convertFileSrc` puts the path in the URI, percent-encoded, with a leading
+/// slash that is the URI's rather than the path's.
+fn requested_path(uri: &tauri::http::Uri) -> String {
+    let encoded = uri.path().as_bytes();
+    let without_leading_slash = encoded.strip_prefix(b"/").unwrap_or(encoded);
+    percent_encoding::percent_decode(without_leading_slash)
+        .decode_utf8_lossy()
+        .into_owned()
+}
+
+/// An empty reply carrying only a status, for the cases with nothing to say.
+fn media_status(status: u16) -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(status)
+        .body(Vec::new())
+        .unwrap_or_default()
+}
+
+/// Reads the part of `file` that `range` asked for, if it asked for one.
+///
+/// A `<video>` does not fetch a file, it fetches pieces of one, and a server
+/// that answers every request with the whole thing is a video that cannot be
+/// seeked. The asset protocol handled this; so does this.
+fn media_body(
+    file: &mut fs::File,
+    length: u64,
+    range: Option<&str>,
+) -> std::io::Result<(Vec<u8>, Option<String>, u16)> {
+    use std::io::{Read, Seek};
+
+    let Some(range) = range.and_then(|value| {
+        http_range::HttpRange::parse(value, length)
+            .ok()
+            .and_then(|ranges| ranges.first().copied())
+    }) else {
+        let mut bytes = Vec::with_capacity(length as usize);
+        file.read_to_end(&mut bytes)?;
+        return Ok((bytes, None, 200));
+    };
+
+    let last = range.start + range.length - 1;
+    file.seek(std::io::SeekFrom::Start(range.start))?;
+
+    let mut bytes = vec![0; range.length as usize];
+    file.read_exact(&mut bytes)?;
+
+    Ok((
+        bytes,
+        Some(format!("bytes {}-{}/{}", range.start, last, length)),
+        206,
+    ))
+}
+
+/// Answers one request for a note's media, or says why it will not.
+fn serve_media(
+    app_handle: &tauri::AppHandle,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    use std::io::Read;
+
+    let asked_for = requested_path(request.uri());
+
+    // The whole point of the scheme. A path that does not resolve inside the
+    // folder that is open is not this app's to serve, whether it belongs to a
+    // vault that was open earlier or to somewhere that never was.
+    let vault = app_handle.state::<Vault>();
+    let Ok(path) = within_vault(&vault, Path::new(&asked_for)) else {
+        return media_status(403);
+    };
+
+    let Ok(mut file) = fs::File::open(&path) else {
+        return media_status(404);
+    };
+    let Ok(length) = file.metadata().map(|data| data.len()) else {
+        return media_status(404);
+    };
+
+    // What it is, read from the first few bytes the way `file(1)` would, with
+    // the name as the tie-breaker.
+    let mut leading = Vec::new();
+    let sniffed = (&mut file).take(length.min(8192)).read_to_end(&mut leading);
+    if sniffed.is_err() || file.rewind_to_start().is_err() {
+        return media_status(500);
+    }
+    let mime = tauri_utils::mime_type::MimeType::parse(&leading, &path.to_string_lossy());
+
+    let range = request
+        .headers()
+        .get(tauri::http::header::RANGE)
+        .and_then(|value| value.to_str().ok());
+
+    let Ok((bytes, content_range, status)) = media_body(&mut file, length, range) else {
+        return media_status(500);
+    };
+
+    let mut response = tauri::http::Response::builder()
+        .status(status)
+        .header(tauri::http::header::CONTENT_TYPE, mime)
+        // Without this a video has no way to ask for part of a file, and the
+        // webview will not offer a scrubber it cannot use.
+        .header(tauri::http::header::ACCEPT_RANGES, "bytes")
+        .header(tauri::http::header::CONTENT_LENGTH, bytes.len());
+
+    if let Some(content_range) = content_range {
+        response = response.header(tauri::http::header::CONTENT_RANGE, content_range);
+    }
+
+    response.body(bytes).unwrap_or_else(|_| media_status(500))
+}
+
+/// `Seek::rewind` by another name, so the `?`-less path above reads plainly.
+trait RewindToStart {
+    fn rewind_to_start(&mut self) -> std::io::Result<()>;
+}
+
+impl RewindToStart for fs::File {
+    fn rewind_to_start(&mut self) -> std::io::Result<()> {
+        std::io::Seek::rewind(self)
+    }
 }
 
 /// Opens a native "open folder" dialog and returns the folder's path plus its
@@ -1291,6 +1427,17 @@ fn set_close_tab_shortcut(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        // A note's images and video, served against the open folder rather
+        // than against a list of every folder ever opened.
+        .register_asynchronous_uri_scheme_protocol(MEDIA_PROTOCOL, |context, request, responder| {
+            let app_handle = context.app_handle().clone();
+            // Off the main thread for the same reason the commands are:
+            // this reads a file, and a video asks for a great many of
+            // these while the window is trying to draw.
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(serve_media(&app_handle, &request));
+            });
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1592,6 +1739,90 @@ mod tests {
         remember(&vault, &note);
 
         assert!(!changed_since_read(&vault, &note));
+    }
+
+    /// What `convertFileSrc` puts in the URI, read back out of it.
+    #[test]
+    fn reads_the_path_a_media_request_is_asking_for() {
+        let uri: tauri::http::Uri = "nuza-media://localhost/%2Fvault%2Fmedia%2Fphoto.png"
+            .parse()
+            .unwrap();
+
+        assert_eq!(requested_path(&uri), "/vault/media/photo.png");
+    }
+
+    /// A space, and anything else a filename is allowed to contain.
+    #[test]
+    fn reads_a_path_with_characters_that_had_to_be_encoded() {
+        let uri: tauri::http::Uri = "nuza-media://localhost/%2Fvault%2Fa%20note%20(1).png"
+            .parse()
+            .unwrap();
+
+        assert_eq!(requested_path(&uri), "/vault/a note (1).png");
+    }
+
+    /// A media file for the range tests, 26 bytes of known content.
+    fn alphabet(dir: &Path) -> (fs::File, u64) {
+        let path = dir.join("media.bin");
+        fs::write(&path, b"abcdefghijklmnopqrstuvwxyz").unwrap();
+        let file = fs::File::open(&path).unwrap();
+        let length = file.metadata().unwrap().len();
+        (file, length)
+    }
+
+    #[test]
+    fn a_request_with_no_range_gets_the_whole_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut file, length) = alphabet(dir.path());
+
+        let (bytes, content_range, status) = media_body(&mut file, length, None).unwrap();
+
+        assert_eq!(bytes, b"abcdefghijklmnopqrstuvwxyz");
+        assert_eq!(content_range, None);
+        assert_eq!(status, 200);
+    }
+
+    /// The reason ranges are handled at all: a video is fetched in pieces, and
+    /// answering every request with the whole file is a video that cannot be
+    /// seeked.
+    #[test]
+    fn a_request_for_part_of_a_file_gets_that_part() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut file, length) = alphabet(dir.path());
+
+        let (bytes, content_range, status) =
+            media_body(&mut file, length, Some("bytes=3-7")).unwrap();
+
+        assert_eq!(bytes, b"defgh");
+        assert_eq!(content_range.as_deref(), Some("bytes 3-7/26"));
+        assert_eq!(status, 206);
+    }
+
+    /// An open-ended range runs to the end of the file.
+    #[test]
+    fn a_request_from_a_point_onwards_runs_to_the_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut file, length) = alphabet(dir.path());
+
+        let (bytes, content_range, _) = media_body(&mut file, length, Some("bytes=20-")).unwrap();
+
+        assert_eq!(bytes, b"uvwxyz");
+        assert_eq!(content_range.as_deref(), Some("bytes 20-25/26"));
+    }
+
+    /// A range header that makes no sense is not worth refusing over - the
+    /// whole file is a correct answer to "give me this file".
+    #[test]
+    fn a_range_that_cannot_be_read_gets_the_whole_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut file, length) = alphabet(dir.path());
+
+        let (bytes, content_range, status) =
+            media_body(&mut file, length, Some("pages=1-2")).unwrap();
+
+        assert_eq!(bytes.len(), 26);
+        assert_eq!(content_range, None);
+        assert_eq!(status, 200);
     }
 
     /// The ordinary case: nothing is in the way and the note moves.
