@@ -8,6 +8,7 @@ import Sidebar, { SidebarHandle } from "./components/Sidebar";
 import SettingsModal from "./components/SettingsModal";
 import FileSearchPalette from "./components/FileSearchPalette";
 import ChangedOnDisk from "./components/ChangedOnDisk";
+import RecoveredEdits from "./components/RecoveredEdits";
 import Notices from "./components/Notices";
 import { useKeymaps, useKeymapListener } from "./hooks/useKeymaps";
 import { useCloseTabMenu } from "./hooks/useCloseTabMenu";
@@ -87,6 +88,9 @@ function App() {
     openPaths,
     dirtyPaths,
     conflicts,
+    recovered,
+    restoreRecovered,
+    discardRecovered,
     folderData,
     rootPath,
     openFolder,
@@ -310,6 +314,14 @@ function App() {
             path={conflicts.has(currentFile) ? currentFile : null}
             onReload={() => void reloadFromDisk(currentFile)}
             onKeepMine={() => void keepMine(currentFile)}
+          />
+          {/* Under the conflict bar, on the rare occasion both are up: the
+              one about what is happening now comes before the one about what
+              happened last time. */}
+          <RecoveredEdits
+            path={recovered.has(currentFile) ? currentFile : null}
+            onRestore={() => void restoreRecovered(currentFile)}
+            onDiscard={() => discardRecovered(currentFile)}
           />
           {/* CodeMirror mounts itself in here and owns the document from then
               on. Nothing about the text passes back through React, which is
