@@ -768,6 +768,113 @@ async fn write_file(
     .await
 }
 
+/// Edits that were in a tab and nowhere else when the app went away.
+///
+/// A note that changed on disk while it had unsaved edits is held: neither
+/// copy is written until someone answers the bar. That is the right answer
+/// while the app is running and the wrong one on the way out, because the
+/// edits only ever existed in the editor's own state - leaving took them with
+/// it, with no warning at any point.
+///
+/// So the buffer is kept here instead, outside the vault, in the app's own
+/// data directory. Nothing in anyone's notes is touched and no copy is
+/// declared the winner; the question is simply still answerable the next time
+/// that note is opened.
+///
+/// The note's own path is stored alongside the text because the file is named
+/// after a hash of that path - a path is not a filename - and a hash can in
+/// principle collide. A file whose recorded path is not the one being asked
+/// about is not that note's, and is treated as though it were not there.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Recovery {
+    path: String,
+    content: String,
+}
+
+/// Where those buffers live, created if this is the first one.
+fn recovery_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("recovery");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// The file `note` would be kept in: its path, hashed, since the path itself
+/// has separators in it and is very often longer than a name may be.
+fn recovery_file(dir: &Path, note: &str) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    note.hash(&mut hasher);
+    dir.join(format!("{:016x}.json", hasher.finish()))
+}
+
+/// Puts the unsaved edits in `path` somewhere they will survive the window
+/// closing. Written on every flush while the conflict is unanswered, so what
+/// is kept is what was last typed rather than what was there when the bar
+/// first appeared.
+#[tauri::command]
+async fn keep_recovery(
+    app_handle: tauri::AppHandle,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    off_thread(move || {
+        let dir = recovery_dir(&app_handle)?;
+        let kept = Recovery {
+            path: path.clone(),
+            content,
+        };
+        let json = serde_json::to_vec(&kept).map_err(|e| e.to_string())?;
+        write_atomically(&recovery_file(&dir, &path), &json)
+    })
+    .await
+}
+
+/// The edits being held for `path`, if there are any.
+///
+/// Reading does not throw them away: until someone has said what to do with
+/// them, an app that goes away again should still have them to offer.
+#[tauri::command]
+async fn take_recovery(
+    app_handle: tauri::AppHandle,
+    path: String,
+) -> Result<Option<String>, String> {
+    off_thread(move || {
+        let dir = recovery_dir(&app_handle)?;
+        let Ok(json) = fs::read(recovery_file(&dir, &path)) else {
+            return Ok(None);
+        };
+
+        let Ok(kept) = serde_json::from_slice::<Recovery>(&json) else {
+            // Half-written or from an older shape of this file. Nothing can be
+            // done with it and nothing should be said about it.
+            return Ok(None);
+        };
+
+        Ok((kept.path == path).then_some(kept.content))
+    })
+    .await
+}
+
+/// Forgets them, once the question has been answered either way.
+#[tauri::command]
+async fn drop_recovery(app_handle: tauri::AppHandle, path: String) -> Result<(), String> {
+    off_thread(move || {
+        let dir = recovery_dir(&app_handle)?;
+        match fs::remove_file(recovery_file(&dir, &path)) {
+            Ok(()) => Ok(()),
+            // Already gone is the state being asked for.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    })
+    .await
+}
+
 /// True for legacy symbol-encoded fonts (Wingdings, Webdings, ...), which map
 /// plain letters to pictographs. Picking one would turn every note - and the
 /// line numbers - into symbols, since the monospace fallback never kicks in.
@@ -1057,6 +1164,9 @@ pub fn run() {
             read_file,
             write_file,
             write_media,
+            keep_recovery,
+            take_recovery,
+            drop_recovery,
             create_file,
             create_folder,
             rename_entry,
@@ -1318,6 +1428,41 @@ mod tests {
         remember(&vault, &note);
 
         assert!(!changed_since_read(&vault, &note));
+    }
+
+    /// A recovery file is named after the note's path, and two paths can in
+    /// principle hash to the same name. The path is recorded inside the file
+    /// so that one which does is not handed back as the other's edits.
+    #[test]
+    fn a_recovery_knows_which_note_it_belongs_to() {
+        let kept = Recovery {
+            path: "/vault/note.md".to_string(),
+            content: "what was typed".to_string(),
+        };
+        let json = serde_json::to_vec(&kept).unwrap();
+
+        let read: Recovery = serde_json::from_slice(&json).unwrap();
+        assert_eq!(read.path, "/vault/note.md");
+        assert_eq!(read.content, "what was typed");
+    }
+
+    /// One name per note, and a different one for a different note.
+    #[test]
+    fn a_note_is_kept_under_a_name_of_its_own() {
+        let dir = Path::new("/recovery");
+
+        assert_eq!(
+            recovery_file(dir, "/vault/note.md"),
+            recovery_file(dir, "/vault/note.md")
+        );
+        assert_ne!(
+            recovery_file(dir, "/vault/note.md"),
+            recovery_file(dir, "/vault/other.md")
+        );
+        // A path is not a filename: what lands in the directory is one.
+        let file = recovery_file(dir, "/vault/deep/note.md");
+        assert_eq!(file.parent(), Some(dir));
+        assert!(file.extension().is_some_and(|e| e == "json"));
     }
 
     /// Saving the scratch note somewhere by hand is consent for that file, and

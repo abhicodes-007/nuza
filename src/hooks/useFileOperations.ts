@@ -74,6 +74,12 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * copy to keep.
    */
   const [conflicts, setConflicts] = useState<ReadonlySet<string>>(() => new Set());
+  /**
+   * Edits kept from a previous run, by the note they belong to. A note gets
+   * an entry here when it is opened and there is a buffer waiting for it; the
+   * entry goes when the offer has been answered either way.
+   */
+  const [recovered, setRecovered] = useState<ReadonlyMap<string, string>>(() => new Map());
 
   // Destructured rather than held as one object: every member is stable, so
   // the callbacks below keep their identity from one render to the next.
@@ -135,6 +141,43 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       next.delete(path);
       return next;
     });
+    // The question has been answered, so there is nothing left to hold on to.
+    void invoke("drop_recovery", { path }).catch(() => {});
+  }, []);
+
+  /** Stops offering what was kept for `path`, and forgets it on disk. */
+  const forgetRecovered = useCallback((path: string) => {
+    setRecovered((kept) => {
+      if (!kept.has(path)) return kept;
+      const next = new Map(kept);
+      next.delete(path);
+      return next;
+    });
+    void invoke("drop_recovery", { path }).catch(() => {});
+  }, []);
+
+  /**
+   * Asks whether anything was kept for `onDisk`, and offers it if what was
+   * kept is not simply what is there now.
+   *
+   * A buffer that matches the file is one the answer no longer matters for -
+   * something else saved the same text, or the note was reloaded - and asking
+   * about it would be asking someone to choose between two identical things.
+   */
+  const offerRecovered = useCallback(async (path: string, onDisk: string) => {
+    try {
+      const kept = await invoke<string | null>("take_recovery", { path });
+      if (kept === null) return;
+      if (kept === onDisk) {
+        void invoke("drop_recovery", { path }).catch(() => {});
+        return;
+      }
+      setRecovered((held) => new Map(held).set(path, kept));
+    } catch (error) {
+      // Nothing is lost by failing to ask - the buffer stays where it is
+      // and the offer comes round again the next time the note is opened.
+      console.error("Couldn't look for kept edits:", error);
+    }
   }, []);
 
   /** Copies dropped files into `directory`, e.g. from a drag onto the sidebar. */
@@ -202,13 +245,18 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
         setOpenPaths(open);
         setCurrentFile(current);
         openDocument(current, content);
+
+        // The likeliest note to have edits waiting is the one that was open
+        // when the app went away, and this is the path it comes back through -
+        // it never goes near `selectFile`.
+        void offerRecovered(current, content);
       } catch {
         resetToScratch();
       } finally {
         sessionReady.current = true;
       }
     },
-    [openDocument, resetToScratch]
+    [openDocument, resetToScratch, offerRecovered]
   );
 
   /** Switches the app over to a folder that has already been read. */
@@ -359,14 +407,45 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   }, [writeDocument]);
 
   /**
+   * The edits in notes that are waiting on an answer, put somewhere they will
+   * outlive the window.
+   *
+   * `saveDirty` leaves these alone on purpose - writing one would be picking a
+   * winner nobody asked it to pick - but leaving them *only* in the editor's
+   * own state means the window closing takes them. They go to the app's data
+   * directory instead: nothing in the vault is touched, no copy is declared
+   * the right one, and the question can be put again the next time the note is
+   * opened.
+   *
+   * Written on every flush rather than only on the way out, so what is kept is
+   * what was last typed, and so a crash is covered as well as a quit.
+   */
+  const keepConflicted = useCallback(async () => {
+    const paths = Array.from(dirtyPathsRef.current).filter(
+      (path) => path !== UNTITLED_FILE && conflictsRef.current.has(path)
+    );
+
+    await Promise.all(
+      paths.map(async (path) => {
+        try {
+          await invoke("keep_recovery", { path, content: readDocument(path) });
+        } catch (error) {
+          report(`Couldn't keep the unsaved edits in "${fileNameOf(path)}"`, error);
+        }
+      })
+    );
+  }, [readDocument]);
+
+  /**
    * Everything that has drifted from where it is kept, put back: the notes to
-   * their files, the scratch note to storage. This is what the autosave timer
+   * their files, the scratch note to storage, and the edits nobody has decided
+   * about yet somewhere they will survive. This is what the autosave timer
    * runs, and what the app runs once more on the way out.
    */
   const flush = useCallback(async () => {
     keepScratch();
-    await saveDirty();
-  }, [keepScratch, saveDirty]);
+    await Promise.all([saveDirty(), keepConflicted()]);
+  }, [keepScratch, saveDirty, keepConflicted]);
 
   // The dirty set only changes identity when a path joins or leaves it, so
   // this schedules a write shortly after a note *becomes* dirty rather than
@@ -443,6 +522,40 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     [writeDocument]
   );
 
+  /**
+   * Puts the kept edits back in the tab, and writes them.
+   *
+   * Written rather than left sitting there dirty, because `replace` is the
+   * "this note has caught up with the file" path and deliberately does not
+   * mark anything dirty - the edits would be on screen and still one crash
+   * away from being lost. Choosing to restore them is choosing them over what
+   * is on disk, so they go to disk.
+   */
+  const restoreRecovered = useCallback(
+    async (path: string) => {
+      const kept = recovered.get(path);
+      if (kept === undefined) return;
+
+      replaceDocument(path, kept);
+      forgetRecovered(path);
+
+      try {
+        await writeDocument(path, true);
+      } catch (error) {
+        report(`Couldn't save the restored edits to "${fileNameOf(path)}"`, error);
+      }
+    },
+    [recovered, replaceDocument, forgetRecovered, writeDocument]
+  );
+
+  /** Keeps what was read from disk, and lets the kept edits go. */
+  const discardRecovered = useCallback(
+    (path: string) => {
+      forgetRecovered(path);
+    },
+    [forgetRecovered]
+  );
+
   const selectFile = useCallback(
     async (path: string) => {
       try {
@@ -450,8 +563,15 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
         // Only a document that has never been opened costs a read; everything
         // else is already sitting in memory as editor state.
-        const content = isDocumentOpen(path) ? null : await invoke<string>("read_file", { path });
+        const firstRead = !isDocumentOpen(path);
+        const content = firstRead ? await invoke<string>("read_file", { path }) : null;
         openDocument(path, content);
+
+        // "The next time that note is opened" is this: a tab being switched
+        // back to is already holding whatever was typed in it, and only a read
+        // from disk is a moment where edits from a previous run could have
+        // been lost. It is also the only moment worth the round trip.
+        if (firstRead) void offerRecovered(path, content ?? "");
 
         setCurrentFile(path);
         setOpenPaths((paths) => (paths.includes(path) ? paths : [...paths, path]));
@@ -460,7 +580,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
         report(`Couldn't open "${fileNameOf(path)}"`, error);
       }
     },
-    [isDocumentOpen, openDocument]
+    [isDocumentOpen, openDocument, offerRecovered]
   );
 
   /**
@@ -625,6 +745,9 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     jumpToFile,
     reloadFromDisk,
     keepMine,
+    recovered,
+    restoreRecovered,
+    discardRecovered,
     createFile,
     createFolder,
     renameEntry,
