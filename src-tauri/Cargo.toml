@@ -36,10 +36,20 @@ tempfile = "3"
 # git checkout, or another editor.
 notify = "8"
 
+# A rename that refuses to replace what is already there. Every platform has
+# one and none of them is `fs::rename`, which is why these are here.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Which Windows this is, so the window gets the backdrop that does not make
 # dragging it crawl. window-vibrancy reads the same crate for the same reason.
+# windows-sys is for MoveFileExW, for the same reason libc is above.
 [target.'cfg(windows)'.dependencies]
 windows-version = "0.1"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
