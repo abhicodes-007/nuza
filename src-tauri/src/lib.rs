@@ -226,19 +226,32 @@ fn within_vault_to_create(vault: &Vault, path: &Path) -> Result<PathBuf, String>
     allow(vault, resolved.join(name))
 }
 
-/// Tauri's dialog pickers deliver their result via a callback fired from a
-/// separate thread, but a `#[tauri::command]` needs to return a value - this
-/// blocks the async command on a channel until that callback runs.
-fn block_on_picker<T, F>(register: F) -> Result<T, String>
+/// Tauri's dialog pickers deliver their result through a callback fired from
+/// another thread, but a `#[tauri::command]` has to return a value. This waits
+/// for that callback without holding on to anything while it does.
+///
+/// It used to be a blocking `recv()`, inside an `async fn`, which meant a
+/// worker of the async runtime was parked for exactly as long as the dialog
+/// was on screen - and a file dialog is open for as long as somebody takes to
+/// find a folder, which can be minutes. The runtime has a handful of those
+/// workers and every other command needs one.
+///
+/// Awaiting a oneshot instead, the task is put aside until the answer comes
+/// and the thread goes back to doing something useful.
+async fn wait_for_picker<T, F>(register: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce(Box<dyn FnOnce(Result<T, String>) + Send>),
 {
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = tokio::sync::oneshot::channel();
     register(Box::new(move |result| {
+        // Nothing to do if the other end has gone: the command was dropped,
+        // and there is nobody left to tell.
         let _ = tx.send(result);
     }));
-    rx.recv().map_err(|e| format!("Channel error: {}", e))?
+
+    rx.await
+        .map_err(|_| "The dialog closed without saying anything".to_string())?
 }
 
 /// Runs `work` somewhere that is not the thread pumping the window.
@@ -455,7 +468,7 @@ impl RewindToStart for fs::File {
 #[tauri::command]
 async fn load_folder_picker(app_handle: tauri::AppHandle) -> Result<Option<OpenedFolder>, String> {
     let scope = app_handle.clone();
-    block_on_picker(|send| {
+    wait_for_picker(|send| {
         app_handle.dialog().file().pick_folder(move |folder_path| {
             let result = match folder_path {
                 Some(path) => adopt_folder(&scope, path.to_string()).map(Some),
@@ -464,6 +477,7 @@ async fn load_folder_picker(app_handle: tauri::AppHandle) -> Result<Option<Opene
             send(result);
         });
     })
+    .await
 }
 
 /// Reopens a folder the app already knows about, without asking for it again.
@@ -634,7 +648,7 @@ async fn save_file_picker(
     content: String,
 ) -> Result<Option<String>, String> {
     let chosen = app_handle.clone();
-    block_on_picker(|send| {
+    wait_for_picker(|send| {
         app_handle
             .dialog()
             .file()
@@ -663,6 +677,7 @@ async fn save_file_picker(
                 send(result);
             });
     })
+    .await
 }
 
 /// Names Win32 hands to a device rather than a file, whatever extension is put
