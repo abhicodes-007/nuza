@@ -312,6 +312,7 @@ fn create_file(
     parent_path: String,
     name: String,
 ) -> Result<(), String> {
+    let name = exact_file_name(&name)?;
     let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
     if path.exists() {
         return Err(format!("\"{}\" already exists", name));
@@ -327,6 +328,7 @@ fn create_folder(
     parent_path: String,
     name: String,
 ) -> Result<(), String> {
+    let name = exact_file_name(&name)?;
     let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
     if path.exists() {
         return Err(format!("\"{}\" already exists", name));
@@ -342,6 +344,7 @@ fn rename_entry(
     path: String,
     new_name: String,
 ) -> Result<String, String> {
+    let new_name = exact_file_name(&new_name)?;
     let old = within_vault(&vault, Path::new(&path))?;
     let parent = old
         .parent()
@@ -362,14 +365,40 @@ fn move_entry(
     path: String,
     target_dir: String,
 ) -> Result<String, String> {
-    let old = within_vault(&vault, Path::new(&path))?;
+    let (old, new_path) = move_destination(&vault, &path, &target_dir)?;
+    fs::rename(&old, &new_path).map_err(|e| e.to_string())?;
+    Ok(new_path.to_string_lossy().into_owned())
+}
+
+/// Where the entry at `path` would land inside `target_dir`, as the pair of
+/// resolved paths `fs::rename` needs, or why the move cannot happen.
+///
+/// Apart from the command so that the guards can be exercised without a window
+/// and a running app: the one that matters most is the last, and getting it
+/// wrong is a lost subtree rather than an error message.
+fn move_destination(
+    vault: &Vault,
+    path: &str,
+    target_dir: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let old = within_vault(vault, Path::new(path))?;
     let name = old
         .file_name()
         .ok_or_else(|| "Invalid path".to_string())?
         .to_owned();
-    let target = within_vault(&vault, Path::new(&target_dir))?;
+    let target = within_vault(vault, Path::new(target_dir))?;
 
-    if old.is_dir() && (target == old || target.starts_with(&old)) {
+    if !target.is_dir() {
+        return Err("That is not a folder to move into".to_string());
+    }
+
+    // Both sides came back from `within_vault` resolved, which is what makes a
+    // component-wise `starts_with` the right test here: a target written with
+    // `..`, or reached through a symlink sitting inside the folder being moved,
+    // is already spelled out as the directory it really is by the time it gets
+    // this far. Comparing the two strings the frontend sent would not be -
+    // `fs::rename` of a directory into its own descendant loses the subtree.
+    if old.is_dir() && target.starts_with(&old) {
         return Err("Cannot move a folder into itself".to_string());
     }
 
@@ -380,8 +409,8 @@ fn move_entry(
             name.to_string_lossy()
         ));
     }
-    fs::rename(&old, &new_path).map_err(|e| e.to_string())?;
-    Ok(new_path.to_string_lossy().into_owned())
+
+    Ok((old, new_path))
 }
 
 #[tauri::command]
@@ -433,23 +462,77 @@ async fn save_file_picker(
     })
 }
 
-/// The final component of `name`, with anything that could climb out of the
-/// target directory removed. A dropped file's name is whatever the sending app
-/// put there, so it is treated as a suggestion rather than a path.
+/// Names Win32 hands to a device rather than a file, whatever extension is put
+/// on the end of them. Creating one fails, or opens a console.
+const RESERVED_NAMES: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// Characters that make a name something other than a name: `:` opens an NTFS
+/// alternate data stream, so `note.md:hidden` writes bytes the file tree has
+/// no way to see, and the rest are Win32 wildcards or redirections.
+const FORBIDDEN_CHARS: &[char] = &['"', '*', ':', '<', '>', '?', '|'];
+
+/// Whether `name` would be a reserved device name on Windows. The extension is
+/// not part of the question: `aux.md` is `AUX` as far as Win32 is concerned.
+fn is_reserved(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").to_ascii_lowercase();
+    RESERVED_NAMES.contains(&stem.as_str())
+}
+
+/// The final component of `name`, as it will actually land on disk, with
+/// anything that could climb out of the target directory or confuse the
+/// filesystem taken off it.
+///
+/// A dropped file's name is whatever the sending app put there, so it is
+/// treated as a suggestion rather than a path. The rules are Windows' as well
+/// as this platform's: a vault is very often a synced folder, and a note named
+/// `report.` or `aux.md` is one that cannot be checked out on a machine that
+/// is not this one. Trailing dots and spaces matter for a second reason -
+/// Win32 drops them silently, so the name checked against what is already in
+/// the folder would not be the name that ended up there, and `unused_path`
+/// would hand back a path that overwrites a file it thought was free.
 fn safe_file_name(name: &str) -> Result<String, String> {
-    let cleaned = name
+    let cleaned: String = name
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or("")
         .trim()
         .trim_start_matches('.')
-        .replace('\0', "");
+        .chars()
+        .filter(|c| !c.is_control() && !FORBIDDEN_CHARS.contains(c))
+        .collect();
+    let cleaned = cleaned.trim_end_matches(['.', ' ']).trim();
 
-    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
-        Err("Invalid file name".to_string())
-    } else {
-        Ok(cleaned)
+    if cleaned.is_empty() {
+        return Err("Invalid file name".to_string());
     }
+    if is_reserved(cleaned) {
+        return Err(format!(
+            "\"{}\" is a name Windows keeps for itself",
+            cleaned
+        ));
+    }
+
+    Ok(cleaned.to_string())
+}
+
+/// `name` exactly as it was given, once it is known to be usable.
+///
+/// The difference from `safe_file_name` is who is asking. A file arriving by
+/// drag-and-drop is worth filing under a tidied-up version of whatever name it
+/// came with; a name somebody typed into the sidebar is not, because the row
+/// the tree then draws is built from what they typed. Quietly writing
+/// `notes.md` for a typed `../notes.md` leaves the tree pointing at a file that
+/// is not there, which is the shape the vault-escape bug had. So this refuses
+/// instead, and the sidebar says why.
+fn exact_file_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if safe_file_name(trimmed)? != trimmed {
+        return Err(format!("\"{}\" is not a name a file can have", trimmed));
+    }
+    Ok(trimmed.to_string())
 }
 
 /// A path in `directory` named after `name` that nothing is using yet, adding
@@ -1183,5 +1266,167 @@ mod tests {
 
         assert!(within_vault(&vault, &chosen).is_ok());
         assert!(within_vault(&vault, &neighbour).is_err());
+    }
+
+    /// A dropped file keeps the name it came with when there is nothing wrong
+    /// with it.
+    #[test]
+    fn leaves_an_ordinary_name_alone() {
+        assert_eq!(safe_file_name("photo.png").unwrap(), "photo.png");
+        assert_eq!(
+            safe_file_name("Notes from 2026 (draft).md").unwrap(),
+            "Notes from 2026 (draft).md"
+        );
+    }
+
+    /// The name on a dropped file is whatever the sending app put there, and
+    /// only the last component of it is a name.
+    #[test]
+    fn tidies_a_dropped_name_into_one_component() {
+        assert_eq!(safe_file_name("../../photo.png").unwrap(), "photo.png");
+        assert_eq!(
+            safe_file_name("C:\\Windows\\photo.png").unwrap(),
+            "photo.png"
+        );
+        assert_eq!(safe_file_name(".hidden.png").unwrap(), "hidden.png");
+    }
+
+    /// `:` is an NTFS alternate data stream: bytes written to `note.md:hidden`
+    /// do not show up in the file tree, or in the file's own size.
+    #[test]
+    fn takes_the_stream_separator_out_of_a_dropped_name() {
+        assert_eq!(safe_file_name("note.md:hidden").unwrap(), "note.mdhidden");
+        assert_eq!(safe_file_name("what?.png").unwrap(), "what.png");
+    }
+
+    /// Win32 drops trailing dots and spaces on the way to disk, so a name that
+    /// ends in one is not the name that lands - and `unused_path` would then be
+    /// checking whether the wrong path is free.
+    #[test]
+    fn takes_trailing_dots_and_spaces_off_a_dropped_name() {
+        assert_eq!(safe_file_name("report.").unwrap(), "report");
+        assert_eq!(safe_file_name("report. . ").unwrap(), "report");
+    }
+
+    #[test]
+    fn refuses_a_dropped_name_with_nothing_usable_left() {
+        assert!(safe_file_name("..").is_err());
+        assert!(safe_file_name("/").is_err());
+        assert!(safe_file_name("   ").is_err());
+        assert!(safe_file_name(":?*").is_err());
+    }
+
+    /// Reserved whatever is put after them: Win32 reads the stem, so `aux.md`
+    /// is the printer port and not a note.
+    #[test]
+    fn refuses_a_reserved_device_name() {
+        assert!(safe_file_name("aux.md").is_err());
+        assert!(safe_file_name("CON").is_err());
+        assert!(safe_file_name("lpt1.txt").is_err());
+        assert!(safe_file_name("auxiliary.md").is_ok());
+    }
+
+    /// A typed name is taken exactly as typed, or refused. The row the sidebar
+    /// draws is built from what was typed, so a file quietly written under a
+    /// different name is one the tree cannot find again.
+    #[test]
+    fn takes_a_typed_name_only_as_it_was_typed() {
+        assert_eq!(exact_file_name("note.md").unwrap(), "note.md");
+        assert_eq!(exact_file_name("  note.md  ").unwrap(), "note.md");
+
+        for typed in [
+            "../../notes.md",
+            "sub/note.md",
+            ".hidden",
+            "note.md:x",
+            "report.",
+            "aux.md",
+        ] {
+            assert!(exact_file_name(typed).is_err(), "{typed} should be refused");
+        }
+    }
+
+    /// A vault with `root` open, a folder in it, and a note in the folder.
+    fn vault_with_a_folder() -> (tempfile::TempDir, Vault) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("folder")).unwrap();
+        fs::create_dir(dir.path().join("folder").join("inner")).unwrap();
+        fs::write(dir.path().join("note.md"), "hello").unwrap();
+        let vault = opened(dir.path());
+        (dir, vault)
+    }
+
+    #[test]
+    fn moves_a_note_into_a_folder() {
+        let (dir, vault) = vault_with_a_folder();
+
+        let (old, new) = move_destination(
+            &vault,
+            dir.path().join("note.md").to_str().unwrap(),
+            dir.path().join("folder").to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(old, dir.path().canonicalize().unwrap().join("note.md"));
+        assert_eq!(new.file_name().unwrap(), "note.md");
+        assert!(new.starts_with(dir.path().canonicalize().unwrap().join("folder")));
+    }
+
+    /// The move that loses a subtree if it goes through.
+    #[test]
+    fn refuses_moving_a_folder_into_its_own_child() {
+        let (dir, vault) = vault_with_a_folder();
+        let folder = dir.path().join("folder");
+
+        assert!(move_destination(
+            &vault,
+            folder.to_str().unwrap(),
+            folder.join("inner").to_str().unwrap(),
+        )
+        .is_err());
+
+        // The same move, spelled so that a textual comparison would let it
+        // past: the target does not start with the folder as written.
+        assert!(move_destination(
+            &vault,
+            folder.to_str().unwrap(),
+            folder
+                .join("..")
+                .join("folder")
+                .join("inner")
+                .to_str()
+                .unwrap(),
+        )
+        .is_err());
+    }
+
+    /// And through a symlink, which no amount of string comparison would catch.
+    #[cfg(unix)]
+    #[test]
+    fn refuses_moving_a_folder_into_itself_through_a_symlink() {
+        let (dir, vault) = vault_with_a_folder();
+        let folder = dir.path().join("folder");
+        let link = dir.path().join("shortcut");
+        std::os::unix::fs::symlink(folder.join("inner"), &link).unwrap();
+
+        assert!(
+            move_destination(&vault, folder.to_str().unwrap(), link.to_str().unwrap()).is_err()
+        );
+    }
+
+    /// Dropping a note onto a file rather than a folder says so, instead of
+    /// handing the OS a path with a file in the middle of it.
+    #[test]
+    fn refuses_moving_into_something_that_is_not_a_folder() {
+        let (dir, vault) = vault_with_a_folder();
+        let other = dir.path().join("other.md");
+        fs::write(&other, "hello").unwrap();
+
+        assert!(move_destination(
+            &vault,
+            dir.path().join("note.md").to_str().unwrap(),
+            other.to_str().unwrap(),
+        )
+        .is_err());
     }
 }

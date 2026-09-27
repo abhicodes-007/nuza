@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import { setDraggedEntry } from "@/lib/dragSource";
+import { nameProblem } from "@/lib/entryName";
 import { parentOf } from "@/lib/fileTree";
 import { FileIcon } from "@/lib/utils";
 import { FileEntry } from "@/lib/types";
@@ -27,6 +28,7 @@ export function NewEntryRow({
         initialValue=""
         onSubmit={onSubmit}
         onCancel={onCancel}
+        validate={nameProblem}
         className="min-w-0 flex-1 rounded bg-zinc-900 px-1 py-0.5 text-sm text-white outline outline-1 outline-blue-500"
       />
     </li>
@@ -159,6 +161,7 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
                 initialValue={entry.name}
                 onSubmit={(value) => submitRename(entry.path, value)}
                 onCancel={cancelRename}
+                validate={nameProblem}
                 className="min-w-0 flex-1 rounded bg-zinc-900 px-1 py-0.5 text-sm text-white outline outline-1 outline-blue-500"
               />
             ) : (
@@ -218,6 +221,7 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
             initialValue={entry.name}
             onSubmit={(value) => submitRename(entry.path, value)}
             onCancel={cancelRename}
+            validate={nameProblem}
             className="min-w-0 flex-1 rounded bg-zinc-900 px-1 py-0.5 text-sm text-white outline outline-1 outline-blue-500"
           />
         ) : (
