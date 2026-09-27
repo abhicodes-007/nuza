@@ -1,4 +1,16 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap");
+/*
+ * Inter, from the app's own bundle rather than from Google.
+ *
+ * This used to be an `@import` of fonts.googleapis.com, which in a desktop
+ * app whose whole premise is files on your own disk meant three things: a
+ * blocking network request at every launch, a silent fall back to the system
+ * sans whenever there was no network, and a request to Google carrying the
+ * user's address every time they opened their notes.
+ *
+ * The variable face covers 100-900 in one file, which is what the weights in
+ * here need - 300 through 700 - without asking for each of them separately.
+ */
+@import "@fontsource-variable/inter";
 @import "tailwindcss";
 
 /*
@@ -490,7 +502,7 @@ textarea,
 }
 
 :root {
-  font-family: "Inter", sans-serif;
+  font-family: "Inter Variable", "Inter", sans-serif;
   font-size: 16px;
   line-height: 24px;
   font-weight: 400;
