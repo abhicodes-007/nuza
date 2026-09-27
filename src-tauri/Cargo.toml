@@ -37,6 +37,9 @@ tempfile = "3"
 # Notices a note being changed underneath the app - by a sync client, a
 # git checkout, or another editor.
 notify = "8"
+# Deleting a note puts it in the Trash, the Recycle Bin or the XDG trash
+# rather than unlinking it - the app has no undo, and the OS does.
+trash = "5"
 # Serving the images and video a note points at, over nuza-media:// rather
 # than through Tauri's asset protocol - see `serve_media`. All three already
 # came in under tauri; these are the same versions, asked for by name.

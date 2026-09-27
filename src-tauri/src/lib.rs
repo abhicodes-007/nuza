@@ -631,11 +631,13 @@ async fn delete_entry(app_handle: tauri::AppHandle, path: String) -> Result<(), 
     off_thread(move || {
         let vault = app_handle.state::<Vault>();
         let p = within_vault(&vault, Path::new(&path))?;
-        if p.is_dir() {
-            fs::remove_dir_all(&p).map_err(|e| e.to_string())
-        } else {
-            fs::remove_file(&p).map_err(|e| e.to_string())
-        }
+
+        // To the Trash, not out of existence. `remove_dir_all` on a folder
+        // picked by mistake took the whole subtree with it and there is no
+        // undo anywhere in this app - the confirm dialog was the only thing
+        // between a misclick and work that is simply gone. The OS has an undo
+        // for exactly this, and it is the one people already know how to use.
+        trash::delete(&p).map_err(|error| error.to_string())
     })
     .await
 }

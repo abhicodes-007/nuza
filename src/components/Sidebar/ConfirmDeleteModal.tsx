@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { cn } from "cn";
 import { useExitAnimation } from "@/hooks/useExitAnimation";
+import { trashName } from "@/lib/platform";
 
 interface ConfirmDeleteModalProps {
   /** What is being deleted, or null when nothing is. */
@@ -54,7 +55,8 @@ export default function ConfirmDeleteModal({ target, onConfirm, onCancel }: Conf
         <h2 className="text-sm font-semibold text-white">Delete {isDirectory ? "folder" : "file"}</h2>
         <p className="mt-2 text-sm text-zinc-400">
           Are you sure you want to delete <span className="text-zinc-200">"{name}"</span>?
-          {isDirectory && " This will delete all of its contents."} This action cannot be undone.
+          {isDirectory && " Everything in it goes too."} It moves to the {trashName()}, so you can put it back
+          from there.
         </p>
         <div className="mt-4 flex justify-end gap-2">
           <button
