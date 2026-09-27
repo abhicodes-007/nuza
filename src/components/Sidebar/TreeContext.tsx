@@ -10,6 +10,12 @@ export type ContextMenuState = {
   entry: FileEntry | null;
 } | null;
 
+/**
+ * What a row in the tree can do. Everything here is stable for as long as the
+ * sidebar is, or close to it - which is what lets the value be memoised and a
+ * search keystroke stop re-rendering the whole vault. Anything that changes
+ * per animation frame belongs in `dragSource`, not here.
+ */
 export interface TreeActions {
   onFileSelect?: (path: string) => void;
   currentFile: string;
@@ -20,10 +26,6 @@ export interface TreeActions {
   submitCreate: (name: string) => void;
   cancelCreate: () => void;
   openContextMenu: (e: React.MouseEvent, entry: FileEntry | null) => void;
-  draggingPath: string | null;
-  setDraggingPath: (path: string | null) => void;
-  dragOverPath: string | null;
-  setDragOverPath: (path: string | null) => void;
   moveEntry: (path: string, targetDir: string) => void;
   /** Files dragged in from outside the app, to be copied into `directory`. */
   attachFiles: (directory: string, files: File[]) => void;

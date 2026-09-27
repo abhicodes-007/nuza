@@ -1,6 +1,7 @@
-import { memo, Ref, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { memo, Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { ChevronsDownUp, FilePlus, FolderPlus, Search, X } from "lucide-react";
 import { cn } from "cn";
+import { draggedPath, endDrag } from "@/lib/dragSource";
 import { searchFiles } from "@/lib/fileSearch";
 import { fileNameOf } from "@/lib/media";
 import { folderOf, parentRow, rowAfter, visibleRows } from "@/lib/treeNavigation";
@@ -74,8 +75,6 @@ function Sidebar({
   const [pendingCreate, setPendingCreate] = useState<PendingCreate>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
-  const [draggingPath, setDraggingPath] = useState<string | null>(null);
-  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -233,9 +232,13 @@ function Sidebar({
     }
   }
 
-  function openContextMenu(e: React.MouseEvent, entry: FileEntry | null) {
+  // Everything handed to the tree context is a stable reference, so that the
+  // context value can be memoised and a re-render of the panel - a keystroke
+  // in the search box, a rename opening - stops re-rendering every row in the
+  // vault along with it.
+  const openContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry | null) => {
     setContextMenu({ x: e.clientX, y: e.clientY, entry });
-  }
+  }, []);
 
   function beginCreate(type: "file" | "folder", parentPath?: string) {
     const target = parentPath ?? rootPath;
@@ -244,39 +247,54 @@ function Sidebar({
     setPendingCreate({ parentPath: target, type });
   }
 
-  async function submitCreate(name: string) {
-    if (!pendingCreate) return;
-    const { parentPath, type } = pendingCreate;
-    setPendingCreate(null);
-    try {
-      if (type === "file") await onCreateFile(parentPath, name);
-      else await onCreateFolder(parentPath, name);
-    } catch (error) {
-      report(`Couldn't create "${name}"`, error);
-    }
-  }
+  const submitCreate = useCallback(
+    async (name: string) => {
+      if (!pendingCreate) return;
+      const { parentPath, type } = pendingCreate;
+      setPendingCreate(null);
+      try {
+        if (type === "file") await onCreateFile(parentPath, name);
+        else await onCreateFolder(parentPath, name);
+      } catch (error) {
+        report(`Couldn't create "${name}"`, error);
+      }
+    },
+    [pendingCreate, onCreateFile, onCreateFolder]
+  );
 
-  async function submitRename(path: string, newName: string) {
-    setRenamingPath(null);
-    try {
-      await onRename(path, newName);
-    } catch (error) {
-      report(`Couldn't rename "${fileNameOf(path)}"`, error);
-    }
-  }
+  const submitRename = useCallback(
+    async (path: string, newName: string) => {
+      setRenamingPath(null);
+      try {
+        await onRename(path, newName);
+      } catch (error) {
+        report(`Couldn't rename "${fileNameOf(path)}"`, error);
+      }
+    },
+    [onRename]
+  );
 
-  function attachFiles(directory: string, files: File[]) {
-    void onAttachFiles(directory, files);
-  }
+  const attachFiles = useCallback(
+    (directory: string, files: File[]) => {
+      void onAttachFiles(directory, files);
+    },
+    [onAttachFiles]
+  );
 
-  async function moveEntry(path: string, targetDir: string) {
-    if (path === targetDir) return;
-    try {
-      await onMove(path, targetDir);
-    } catch (error) {
-      report(`Couldn't move "${fileNameOf(path)}"`, error);
-    }
-  }
+  const moveEntry = useCallback(
+    async (path: string, targetDir: string) => {
+      if (path === targetDir) return;
+      try {
+        await onMove(path, targetDir);
+      } catch (error) {
+        report(`Couldn't move "${fileNameOf(path)}"`, error);
+      }
+    },
+    [onMove]
+  );
+
+  const cancelRename = useCallback(() => setRenamingPath(null), []);
+  const cancelCreate = useCallback(() => setPendingCreate(null), []);
 
   async function confirmDelete() {
     if (!deleteTarget) return;
@@ -352,23 +370,34 @@ function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextMenu]);
 
-  const treeActions: TreeActions = {
-    onFileSelect,
-    currentFile,
-    renamingPath,
-    submitRename,
-    cancelRename: () => setRenamingPath(null),
-    pendingCreate,
-    submitCreate,
-    cancelCreate: () => setPendingCreate(null),
-    openContextMenu,
-    draggingPath,
-    setDraggingPath,
-    dragOverPath,
-    setDragOverPath,
-    moveEntry,
-    attachFiles,
-  };
+  const treeActions: TreeActions = useMemo(
+    () => ({
+      onFileSelect,
+      currentFile,
+      renamingPath,
+      submitRename,
+      cancelRename,
+      pendingCreate,
+      submitCreate,
+      cancelCreate,
+      openContextMenu,
+      moveEntry,
+      attachFiles,
+    }),
+    [
+      onFileSelect,
+      currentFile,
+      renamingPath,
+      submitRename,
+      cancelRename,
+      pendingCreate,
+      submitCreate,
+      cancelCreate,
+      openContextMenu,
+      moveEntry,
+      attachFiles,
+    ]
+  );
 
   return (
     <aside className="relative flex h-full w-full shrink-0 flex-col text-zinc-300">
@@ -491,19 +520,19 @@ function Sidebar({
         }}
         onDragOver={(e) => {
           if (!rootPath) return;
-          if (!draggingPath && !e.dataTransfer.types.includes("Files")) return;
+          if (!draggedPath() && !e.dataTransfer.types.includes("Files")) return;
           e.preventDefault();
         }}
         onDrop={(e) => {
           if (!rootPath) return;
           const files = Array.from(e.dataTransfer.files);
-          if (!files.length && !draggingPath) return;
+          const dragging = draggedPath();
+          if (!files.length && !dragging) return;
 
           e.preventDefault();
+          endDrag();
           if (files.length) attachFiles(rootPath, files);
-          else if (draggingPath) moveEntry(draggingPath, rootPath);
-          setDraggingPath(null);
-          setDragOverPath(null);
+          else if (dragging) moveEntry(dragging, rootPath);
         }}
         className="group/tree flex flex-1 flex-col overflow-y-auto px-2 py-3 outline-none"
       >
@@ -530,11 +559,7 @@ function Sidebar({
           <TreeContext.Provider value={treeActions}>
             <ul className="space-y-0.5">
               {pendingCreate?.parentPath === rootPath && (
-                <NewEntryRow
-                  type={pendingCreate.type}
-                  onSubmit={submitCreate}
-                  onCancel={() => setPendingCreate(null)}
-                />
+                <NewEntryRow type={pendingCreate.type} onSubmit={submitCreate} onCancel={cancelCreate} />
               )}
               {data.map((entry) => (
                 <FileTreeNode key={entry.path} entry={entry} />
