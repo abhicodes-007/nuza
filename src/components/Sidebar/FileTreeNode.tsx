@@ -1,6 +1,13 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
-import { setDraggedEntry } from "@/lib/dragSource";
+import {
+  draggedPath,
+  endDrag,
+  setDragOver,
+  setDraggedEntry,
+  useIsDragged,
+  useIsDragOver,
+} from "@/lib/dragSource";
 import { nameProblem } from "@/lib/entryName";
 import { parentOf } from "@/lib/fileTree";
 import { FileIcon } from "@/lib/utils";
@@ -35,7 +42,15 @@ export function NewEntryRow({
   );
 }
 
-export default function FileTreeNode({ entry }: { entry: FileEntry }) {
+/**
+ * One row of the tree, and the rows underneath it when it is a folder.
+ *
+ * Memoised, and paired with a memoised tree context: between them, a keystroke
+ * in the search box or a rename opening somewhere else in the vault no longer
+ * re-renders every row in it. The two flags that do change constantly come
+ * from `dragSource`, where each row subscribes only to its own answer.
+ */
+function FileTreeNode({ entry }: { entry: FileEntry }) {
   const {
     onFileSelect,
     currentFile,
@@ -46,18 +61,14 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
     submitCreate,
     cancelCreate,
     openContextMenu,
-    draggingPath,
-    setDraggingPath,
-    dragOverPath,
-    setDragOverPath,
     moveEntry,
     attachFiles,
   } = useTreeContext();
 
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const isRenaming = renamingPath === entry.path;
-  const isDraggedOver = dragOverPath === entry.path;
-  const isBeingDragged = draggingPath === entry.path;
+  const isDraggedOver = useIsDragOver(entry.path);
+  const isBeingDragged = useIsDragged(entry.path);
   const showCreateRow = entry.isDirectory && pendingCreate?.parentPath === entry.path;
 
   // Auto-expand a folder when the user asks to create something inside it,
@@ -71,14 +82,11 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
     e.dataTransfer.setData("text/plain", entry.path);
     e.dataTransfer.effectAllowed = "all";
     setDraggedEntry({ path: entry.path, isDirectory: entry.isDirectory });
-    setDraggingPath(entry.path);
   }
 
   function handleDragEnd(e: React.DragEvent) {
     e.stopPropagation();
-    setDraggedEntry(null);
-    setDraggingPath(null);
-    setDragOverPath(null);
+    endDrag();
   }
 
   /** True while something from outside the app is being dragged over a row. */
@@ -91,26 +99,28 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
 
   function handleDragOver(e: React.DragEvent) {
     const external = carriesFiles(e);
-    if (!external && (!draggingPath || draggingPath === entry.path)) return;
+    const dragging = draggedPath();
+    if (!external && (!dragging || dragging === entry.path)) return;
     e.preventDefault();
     e.stopPropagation();
     // Copying something in from outside, moving something already in the vault.
     e.dataTransfer.dropEffect = external ? "copy" : "move";
-    setDragOverPath(entry.path);
+    setDragOver(entry.path);
   }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    setDragOverPath(null);
 
     const files = Array.from(e.dataTransfer.files);
+    const dragging = draggedPath();
+    endDrag();
+
     if (files.length) {
       attachFiles(dropTarget, files);
-    } else if (draggingPath && draggingPath !== entry.path && entry.isDirectory) {
-      moveEntry(draggingPath, entry.path);
+    } else if (dragging && dragging !== entry.path && entry.isDirectory) {
+      moveEntry(dragging, entry.path);
     }
-    setDraggingPath(null);
   }
 
   if (entry.isDirectory) {
@@ -140,7 +150,7 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
             onDragOver={handleDragOver}
             onDragLeave={(e) => {
               e.stopPropagation();
-              if (dragOverPath === entry.path) setDragOverPath(null);
+              if (isDraggedOver) setDragOver(null);
             }}
             onDrop={handleDrop}
             onContextMenu={(e) => {
@@ -174,7 +184,7 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
               <NewEntryRow type={pendingCreate!.type} onSubmit={submitCreate} onCancel={cancelCreate} />
             )}
             {entry.children?.map((child) => (
-              <FileTreeNode key={child.path} entry={child} />
+              <MemoisedFileTreeNode key={child.path} entry={child} />
             ))}
           </ul>
         </details>
@@ -195,7 +205,7 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
         onDragOver={handleDragOver}
         onDragLeave={(e) => {
           e.stopPropagation();
-          if (dragOverPath === entry.path) setDragOverPath(null);
+          if (isDraggedOver) setDragOver(null);
         }}
         onDrop={handleDrop}
         onClick={() => !isRenaming && onFileSelect && onFileSelect(entry.path)}
@@ -231,3 +241,7 @@ export default function FileTreeNode({ entry }: { entry: FileEntry }) {
     </li>
   );
 }
+
+const MemoisedFileTreeNode = memo(FileTreeNode);
+
+export default MemoisedFileTreeNode;
