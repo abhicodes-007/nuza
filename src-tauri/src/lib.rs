@@ -346,12 +346,20 @@ async fn create_file(
         let vault = app_handle.state::<Vault>();
         let name = exact_file_name(&name)?;
         let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
-        if path.exists() {
-            return Err(format!("\"{}\" already exists", name));
-        }
-        fs::File::create(&path)
+
+        // `create_new` rather than a check and then a create: the check is a
+        // statement about a moment that has passed by the time the file is
+        // made, and `File::create` truncates whatever it finds. Together those
+        // are a note emptied by someone else creating it first.
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
             .map(|_| ())
-            .map_err(|e| e.to_string())
+            .map_err(|error| match already_exists(&error) {
+                true => format!("\"{}\" already exists", name),
+                false => error.to_string(),
+            })
     })
     .await
 }
@@ -366,10 +374,13 @@ async fn create_folder(
         let vault = app_handle.state::<Vault>();
         let name = exact_file_name(&name)?;
         let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
-        if path.exists() {
-            return Err(format!("\"{}\" already exists", name));
-        }
-        fs::create_dir(&path).map_err(|e| e.to_string())
+
+        // `create_dir` is already all-or-nothing; it just needed to be the
+        // thing that decides, rather than a check in front of it.
+        fs::create_dir(&path).map_err(|error| match already_exists(&error) {
+            true => format!("\"{}\" already exists", name),
+            false => error.to_string(),
+        })
     })
     .await
 }
@@ -390,10 +401,11 @@ async fn rename_entry(
             .parent()
             .ok_or_else(|| "Cannot rename this item".to_string())?;
         let new_path = within_vault_to_create(&vault, &parent.join(&new_name))?;
-        if new_path.exists() {
-            return Err(format!("\"{}\" already exists", new_name));
-        }
-        fs::rename(&old, &new_path).map_err(|e| e.to_string())?;
+
+        rename_no_replace(&old, &new_path).map_err(|error| match already_exists(&error) {
+            true => format!("\"{}\" already exists", new_name),
+            false => error.to_string(),
+        })?;
         Ok(new_path.to_string_lossy().into_owned())
     })
     .await
@@ -410,7 +422,12 @@ async fn move_entry(
     off_thread(move || {
         let vault = app_handle.state::<Vault>();
         let (old, new_path) = move_destination(&vault, &path, &target_dir)?;
-        fs::rename(&old, &new_path).map_err(|e| e.to_string())?;
+        let name = new_path.file_name().unwrap_or_default().to_string_lossy();
+
+        rename_no_replace(&old, &new_path).map_err(|error| match already_exists(&error) {
+            true => format!("\"{}\" already exists in destination", name),
+            false => error.to_string(),
+        })?;
         Ok(new_path.to_string_lossy().into_owned())
     })
     .await
@@ -585,14 +602,145 @@ fn exact_file_name(name: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-/// A path in `directory` named after `name` that nothing is using yet, adding
-/// " 1", " 2" and so on before the extension the way a file manager would.
-fn unused_path(directory: &Path, name: &str) -> std::path::PathBuf {
-    let candidate = directory.join(name);
-    if !candidate.exists() {
-        return candidate;
+/// Renames `from` to `to`, refusing rather than replacing when `to` is taken.
+///
+/// `fs::rename` is the wrong primitive for every rename in this file. On Unix
+/// it replaces the destination silently, which makes the `exists()` check in
+/// front of each one the only thing standing between a race and a note that is
+/// simply gone - and a check is not a guarantee. The gap between asking and
+/// acting is exactly where a sync client finishes writing the file being
+/// renamed onto, and the loser of that race is whoever wrote first.
+///
+/// Every platform has a way to say "and fail if it is taken"; none of them is
+/// the portable one. Where the filesystem underneath does not know the flag,
+/// the call comes back unsupported and the plain rename is used after all -
+/// no worse than before, with the check in front of it still catching every
+/// case that is not a race.
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    match rename_exclusively(from, to) {
+        Err(error) if not_supported(&error) => fs::rename(from, to),
+        result => result,
+    }
+}
+
+/// Whether the filesystem turned the request down for not understanding it,
+/// rather than for the reason the request exists.
+fn not_supported(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        // ENOSYS: the kernel has no such call. EINVAL / ENOTSUP / EOPNOTSUPP:
+        // it has it, and this filesystem does not implement the flag.
+        matches!(
+            error.raw_os_error(),
+            Some(libc::ENOSYS) | Some(libc::EINVAL) | Some(libc::ENOTSUP) | Some(libc::EOPNOTSUPP)
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// `from` and `to` as NUL-terminated strings, for the calls below.
+#[cfg(unix)]
+fn as_c_paths(from: &Path, to: &Path) -> std::io::Result<(std::ffi::CString, std::ffi::CString)> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let source = std::ffi::CString::new(from.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let target = std::ffi::CString::new(to.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    Ok((source, target))
+}
+
+#[cfg(target_os = "linux")]
+fn rename_exclusively(from: &Path, to: &Path) -> std::io::Result<()> {
+    let (source, target) = as_c_paths(from, to)?;
+
+    // SAFETY: both are NUL-terminated strings that outlive the call, and
+    // AT_FDCWD is the documented way to ask for paths as written.
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            target.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_exclusively(from: &Path, to: &Path) -> std::io::Result<()> {
+    let (source, target) = as_c_paths(from, to)?;
+
+    // SAFETY: as above - two NUL-terminated strings that outlive the call.
+    let result = unsafe { libc::renamex_np(source.as_ptr(), target.as_ptr(), libc::RENAME_EXCL) };
+
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+fn rename_exclusively(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    /// Win32 wants UTF-16, NUL-terminated.
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str().encode_wide().chain(Some(0)).collect()
     }
 
+    let (source, target) = (wide(from), wide(to));
+
+    // `fs::rename` passes MOVEFILE_REPLACE_EXISTING; the whole point here is
+    // not to. Without it MoveFileExW fails with ERROR_ALREADY_EXISTS, which
+    // Rust maps to the AlreadyExists kind the callers are looking for.
+    //
+    // SAFETY: both are NUL-terminated wide strings that outlive the call.
+    let moved = unsafe {
+        windows_sys::Win32::Storage::FileSystem::MoveFileExW(source.as_ptr(), target.as_ptr(), 0)
+    };
+
+    if moved != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn rename_exclusively(_from: &Path, _to: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+/// Whether a failure was "something is already there".
+fn already_exists(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::AlreadyExists
+}
+
+/// Creates a file in `directory` named after `name` that nothing was using,
+/// adding " 1", " 2" and so on before the extension the way a file manager
+/// would. Hands back the file itself along with where it landed.
+///
+/// Creating rather than choosing a name and leaving the caller to write it:
+/// asking whether a path is free and then writing to it are two moments, and
+/// two attachments dropped at once are perfectly capable of both being told
+/// that "photo.png" is free. `create_new` asks and answers in one step, so
+/// the one that loses moves on to "photo 1.png" instead of writing over the
+/// one that won.
+fn create_unused(directory: &Path, name: &str) -> Result<(fs::File, PathBuf), String> {
     let stem = Path::new(name)
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -602,14 +750,25 @@ fn unused_path(directory: &Path, name: &str) -> std::path::PathBuf {
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
 
-    for n in 1..10_000 {
-        let candidate = directory.join(format!("{} {}{}", stem, n, extension));
-        if !candidate.exists() {
-            return candidate;
+    let mut last = None;
+    for n in 0..10_000 {
+        let candidate = match n {
+            0 => directory.join(name),
+            _ => directory.join(format!("{} {}{}", stem, n, extension)),
+        };
+
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((file, candidate)),
+            Err(error) if already_exists(&error) => continue,
+            Err(error) => last = Some(error.to_string()),
         }
     }
 
-    directory.join(name)
+    Err(last.unwrap_or_else(|| format!("Could not find a free name for \"{}\"", name)))
 }
 
 /// The folder to actually file media in, preferring one already sitting there
@@ -673,8 +832,8 @@ async fn write_media(
         // and a media folder that is a symlink out of the vault would have
         // passed above.
         let directory = within_vault(&vault, &directory)?;
-        let path = unused_path(&directory, &safe_file_name(&name)?);
-        fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        let (mut file, path) = create_unused(&directory, &safe_file_name(&name)?)?;
+        std::io::Write::write_all(&mut file, &bytes).map_err(|e| e.to_string())?;
 
         Ok(path.to_string_lossy().into_owned())
     })
@@ -1428,6 +1587,111 @@ mod tests {
         remember(&vault, &note);
 
         assert!(!changed_since_read(&vault, &note));
+    }
+
+    /// The ordinary case: nothing is in the way and the note moves.
+    #[test]
+    fn renames_a_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("note.md");
+        let to = dir.path().join("renamed.md");
+        fs::write(&from, "hello").unwrap();
+
+        rename_no_replace(&from, &to).unwrap();
+
+        assert!(!from.exists());
+        assert_eq!(contents(&to), "hello");
+    }
+
+    /// The one this exists for. `fs::rename` replaces the destination without
+    /// a word on Unix, so a note that happened to be there would be gone - and
+    /// the `exists()` check that used to be the only guard cannot see anything
+    /// created after it ran.
+    #[test]
+    fn refuses_to_rename_over_a_note_that_is_already_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("note.md");
+        let to = dir.path().join("taken.md");
+        fs::write(&from, "mine").unwrap();
+        fs::write(&to, "someone else's").unwrap();
+
+        let error = rename_no_replace(&from, &to).unwrap_err();
+
+        assert!(
+            already_exists(&error),
+            "expected AlreadyExists, got {error:?}"
+        );
+        // Both are still there, and neither has been touched.
+        assert_eq!(contents(&from), "mine");
+        assert_eq!(contents(&to), "someone else's");
+    }
+
+    /// A folder in the way counts too - that one loses a whole subtree.
+    #[test]
+    fn refuses_to_rename_over_a_folder_that_is_already_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("notes");
+        let to = dir.path().join("taken");
+        fs::create_dir(&from).unwrap();
+        fs::create_dir(&to).unwrap();
+        fs::write(to.join("kept.md"), "still here").unwrap();
+
+        assert!(rename_no_replace(&from, &to).is_err());
+        assert_eq!(contents(&to.join("kept.md")), "still here");
+    }
+
+    #[test]
+    fn a_dropped_file_keeps_its_name_when_nothing_is_using_it() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let (_, path) = create_unused(dir.path(), "photo.png").unwrap();
+
+        assert_eq!(path, dir.path().join("photo.png"));
+        assert!(path.exists());
+    }
+
+    /// Two attachments with the same name land beside each other rather than
+    /// one on top of the other.
+    #[test]
+    fn a_dropped_file_is_numbered_rather_than_written_over() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("photo.png"), "the first one").unwrap();
+
+        let (_, path) = create_unused(dir.path(), "photo.png").unwrap();
+        assert_eq!(path, dir.path().join("photo 1.png"));
+
+        let (_, next) = create_unused(dir.path(), "photo.png").unwrap();
+        assert_eq!(next, dir.path().join("photo 2.png"));
+
+        // And the one that was there is untouched.
+        assert_eq!(contents(&dir.path().join("photo.png")), "the first one");
+    }
+
+    /// The file comes back open, because creating it and writing it are the
+    /// same act - anything else is another gap for someone to write into.
+    #[test]
+    fn a_dropped_file_comes_back_ready_to_write() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut file, path) = create_unused(dir.path(), "photo.png").unwrap();
+
+        file.write_all(b"the bytes").unwrap();
+        drop(file);
+
+        assert_eq!(contents(&path), "the bytes");
+    }
+
+    /// A name with no extension is numbered on the end rather than in the
+    /// middle of nothing.
+    #[test]
+    fn a_dropped_file_with_no_extension_is_numbered_too() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("scan"), "first").unwrap();
+
+        let (_, path) = create_unused(dir.path(), "scan").unwrap();
+
+        assert_eq!(path, dir.path().join("scan 1"));
     }
 
     /// A recovery file is named after the note's path, and two paths can in
