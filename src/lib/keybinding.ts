@@ -99,6 +99,21 @@ export function matchesBinding(e: KeyboardEvent, binding: string, isMac: boolean
   return eventKey === key && e.shiftKey === wantsShift;
 }
 
+/**
+ * Whether a binding should still fire while the keyboard is in something that
+ * takes text - a rename row, the search box, the editor itself.
+ *
+ * A chord held down with Cmd or Ctrl is nobody's idea of typing; every other
+ * shape is. A binding rebound to a bare letter, or to shift or alt and a
+ * letter, would otherwise fire in the middle of a filename - and because the
+ * listener calls `preventDefault`, the letter would not even be typed. The
+ * defaults all carry one of these two, so this changes nothing about them.
+ */
+export function firesWhileTyping(binding: string): boolean {
+  const parts = binding.split("+");
+  return parts.includes("mod") || parts.includes("ctrl");
+}
+
 export function formatBinding(binding: string, isMac: boolean = isMacPlatform()): string {
   if (!binding) return "";
 

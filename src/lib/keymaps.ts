@@ -113,3 +113,26 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
 ];
 
 export const KEYMAP_STORAGE_KEY = "nuza:keymap-overrides";
+
+/**
+ * The actions whose binding is also some other action's.
+ *
+ * Two actions can be given the same chord, and the listener returns on the
+ * first one it matches - so the loser simply stops working, with nothing on
+ * screen to say why. Settings shows this beside both of them.
+ */
+export function conflictingActions(bindings: Partial<Record<KeymapAction, string>>): Set<KeymapAction> {
+  const seen = new Map<string, KeymapAction[]>();
+
+  for (const action of KEYMAP_ACTIONS) {
+    const binding = bindings[action.id];
+    if (!binding) continue;
+    seen.set(binding, [...(seen.get(binding) ?? []), action.id]);
+  }
+
+  const clashing = new Set<KeymapAction>();
+  for (const sharing of seen.values()) {
+    if (sharing.length > 1) for (const action of sharing) clashing.add(action);
+  }
+  return clashing;
+}

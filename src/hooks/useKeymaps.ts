@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { KEYMAP_ACTIONS, KEYMAP_STORAGE_KEY, KeymapAction } from "@/lib/keymaps";
-import { matchesBinding } from "@/lib/keybinding";
+import { firesWhileTyping, matchesBinding } from "@/lib/keybinding";
 
 type KeymapOverrides = Partial<Record<KeymapAction, string>>;
 
@@ -48,6 +48,22 @@ export function useKeymaps() {
 }
 
 /**
+ * Whether the keystroke landed in something that takes text.
+ *
+ * The editor counts: CodeMirror is a contenteditable, and a shortcut bound to
+ * a bare letter firing in the middle of a sentence - swallowing the letter,
+ * since the listener calls `preventDefault` - is the same bug as it firing in
+ * the middle of a filename.
+ */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+/**
  * Wires up a single global keydown listener that dispatches to the given
  * handlers based on the current (possibly user-customized) bindings.
  * Uses the capture phase so shortcuts still fire while CodeMirror has focus.
@@ -58,7 +74,11 @@ export function useKeymapListener(
 ) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      const typing = isTyping(e.target);
+
       for (const action of Object.keys(bindings) as KeymapAction[]) {
+        if (typing && !firesWhileTyping(bindings[action])) continue;
+
         if (matchesBinding(e, bindings[action])) {
           const handler = handlers[action];
           if (handler) {

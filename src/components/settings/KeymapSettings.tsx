@@ -1,4 +1,5 @@
-import { KEYMAP_ACTIONS, KeymapAction } from "@/lib/keymaps";
+import { useMemo } from "react";
+import { conflictingActions, KEYMAP_ACTIONS, KeymapAction } from "@/lib/keymaps";
 import KeyRecorder from "./KeyRecorder";
 
 interface KeymapSettingsProps {
@@ -15,6 +16,11 @@ export default function KeymapSettings({
   resetAll,
 }: KeymapSettingsProps) {
   const hasCustomBindings = KEYMAP_ACTIONS.some((action) => bindings[action.id] !== action.defaultBinding);
+
+  // Two actions on one chord is resolved by whichever the listener reaches
+  // first, which is an order nobody chose and nothing shows. Both of them are
+  // marked instead, so the one that stopped working says why.
+  const clashing = useMemo(() => conflictingActions(bindings), [bindings]);
 
   return (
     <div>
@@ -35,7 +41,13 @@ export default function KeymapSettings({
           <div key={action.id} className="flex items-center justify-between gap-4 py-2.5">
             <div className="min-w-0">
               <h3 className="text-sm font-medium text-white truncate">{action.label}</h3>
-              <p className="text-xs text-gray-500 mt-0.5 truncate">{action.description}</p>
+              {clashing.has(action.id) ? (
+                <p className="mt-0.5 truncate text-xs text-amber-400">
+                  Shared with another shortcut — only one of them will run.
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500 mt-0.5 truncate">{action.description}</p>
+              )}
             </div>
             <KeyRecorder
               binding={bindings[action.id]}
