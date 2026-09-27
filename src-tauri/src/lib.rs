@@ -241,6 +241,36 @@ where
     rx.recv().map_err(|e| format!("Channel error: {}", e))?
 }
 
+/// Runs `work` somewhere that is not the thread pumping the window.
+///
+/// A `#[tauri::command]` declared `fn` rather than `async fn` is called on the
+/// main thread, which is also the thread running the event loop: while it is
+/// reading a note, the window is not drawing, resizing or listening to the
+/// keyboard. Every command below does filesystem work whose cost is the size
+/// of what it is working on - a vault walked at startup, a note read on a tab
+/// switch, an attachment decoded and written - so each of them was a stall the
+/// length of that work, several times a minute in the case of autosave.
+///
+/// Declaring them `async` hands them to the async runtime; this then hands the
+/// blocking part to a thread that is allowed to block. The state they need is
+/// reached through the `AppHandle` rather than taken as a `State<'_, Vault>`,
+/// because that borrow cannot cross onto another thread.
+///
+/// One thing does change with them: commands no longer run one after another
+/// in the order they arrived. Nothing here relies on that - a note is written
+/// atomically and the frontend debounces per path - but two writes to the same
+/// note now finish in whichever order the OS gets to them rather than in call
+/// order.
+async fn off_thread<T, F>(work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize)]
 struct OpenedFolder {
     path: String,
@@ -302,72 +332,88 @@ async fn load_folder_picker(app_handle: tauri::AppHandle) -> Result<Option<Opene
 
 /// Reopens a folder the app already knows about, without asking for it again.
 #[tauri::command]
-fn open_folder(app_handle: tauri::AppHandle, path: String) -> Result<OpenedFolder, String> {
-    adopt_folder(&app_handle, path)
+async fn open_folder(app_handle: tauri::AppHandle, path: String) -> Result<OpenedFolder, String> {
+    off_thread(move || adopt_folder(&app_handle, path)).await
 }
 
 #[tauri::command]
-fn create_file(
-    vault: tauri::State<Vault>,
+async fn create_file(
+    app_handle: tauri::AppHandle,
     parent_path: String,
     name: String,
 ) -> Result<(), String> {
-    let name = exact_file_name(&name)?;
-    let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
-    if path.exists() {
-        return Err(format!("\"{}\" already exists", name));
-    }
-    fs::File::create(&path)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    off_thread(move || {
+        let vault = app_handle.state::<Vault>();
+        let name = exact_file_name(&name)?;
+        let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
+        if path.exists() {
+            return Err(format!("\"{}\" already exists", name));
+        }
+        fs::File::create(&path)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-fn create_folder(
-    vault: tauri::State<Vault>,
+async fn create_folder(
+    app_handle: tauri::AppHandle,
     parent_path: String,
     name: String,
 ) -> Result<(), String> {
-    let name = exact_file_name(&name)?;
-    let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
-    if path.exists() {
-        return Err(format!("\"{}\" already exists", name));
-    }
-    fs::create_dir(&path).map_err(|e| e.to_string())
+    off_thread(move || {
+        let vault = app_handle.state::<Vault>();
+        let name = exact_file_name(&name)?;
+        let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
+        if path.exists() {
+            return Err(format!("\"{}\" already exists", name));
+        }
+        fs::create_dir(&path).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Renames a file or folder in place, keeping it in the same parent
 /// directory. Returns the new full path.
 #[tauri::command]
-fn rename_entry(
-    vault: tauri::State<Vault>,
+async fn rename_entry(
+    app_handle: tauri::AppHandle,
     path: String,
     new_name: String,
 ) -> Result<String, String> {
-    let new_name = exact_file_name(&new_name)?;
-    let old = within_vault(&vault, Path::new(&path))?;
-    let parent = old
-        .parent()
-        .ok_or_else(|| "Cannot rename this item".to_string())?;
-    let new_path = within_vault_to_create(&vault, &parent.join(&new_name))?;
-    if new_path.exists() {
-        return Err(format!("\"{}\" already exists", new_name));
-    }
-    fs::rename(&old, &new_path).map_err(|e| e.to_string())?;
-    Ok(new_path.to_string_lossy().into_owned())
+    off_thread(move || {
+        let vault = app_handle.state::<Vault>();
+        let new_name = exact_file_name(&new_name)?;
+        let old = within_vault(&vault, Path::new(&path))?;
+        let parent = old
+            .parent()
+            .ok_or_else(|| "Cannot rename this item".to_string())?;
+        let new_path = within_vault_to_create(&vault, &parent.join(&new_name))?;
+        if new_path.exists() {
+            return Err(format!("\"{}\" already exists", new_name));
+        }
+        fs::rename(&old, &new_path).map_err(|e| e.to_string())?;
+        Ok(new_path.to_string_lossy().into_owned())
+    })
+    .await
 }
 
 /// Moves a file or folder into `target_dir` (e.g. from a drag-and-drop),
 /// keeping its name. Returns the new full path.
 #[tauri::command]
-fn move_entry(
-    vault: tauri::State<Vault>,
+async fn move_entry(
+    app_handle: tauri::AppHandle,
     path: String,
     target_dir: String,
 ) -> Result<String, String> {
-    let (old, new_path) = move_destination(&vault, &path, &target_dir)?;
-    fs::rename(&old, &new_path).map_err(|e| e.to_string())?;
-    Ok(new_path.to_string_lossy().into_owned())
+    off_thread(move || {
+        let vault = app_handle.state::<Vault>();
+        let (old, new_path) = move_destination(&vault, &path, &target_dir)?;
+        fs::rename(&old, &new_path).map_err(|e| e.to_string())?;
+        Ok(new_path.to_string_lossy().into_owned())
+    })
+    .await
 }
 
 /// Where the entry at `path` would land inside `target_dir`, as the pair of
@@ -414,13 +460,17 @@ fn move_destination(
 }
 
 #[tauri::command]
-fn delete_entry(vault: tauri::State<Vault>, path: String) -> Result<(), String> {
-    let p = within_vault(&vault, Path::new(&path))?;
-    if p.is_dir() {
-        fs::remove_dir_all(&p).map_err(|e| e.to_string())
-    } else {
-        fs::remove_file(&p).map_err(|e| e.to_string())
-    }
+async fn delete_entry(app_handle: tauri::AppHandle, path: String) -> Result<(), String> {
+    off_thread(move || {
+        let vault = app_handle.state::<Vault>();
+        let p = within_vault(&vault, Path::new(&path))?;
+        if p.is_dir() {
+            fs::remove_dir_all(&p).map_err(|e| e.to_string())
+        } else {
+            fs::remove_file(&p).map_err(|e| e.to_string())
+        }
+    })
+    .await
 }
 
 /// Opens a native "save file" dialog and writes `content` to the chosen path.
@@ -601,39 +651,48 @@ fn preferred_directory(directory: &Path) -> std::path::PathBuf {
 /// Returns the full path actually written, which may have been renamed to
 /// avoid overwriting something.
 #[tauri::command]
-fn write_media(
-    vault: tauri::State<Vault>,
+async fn write_media(
+    app_handle: tauri::AppHandle,
     directory: String,
     name: String,
     data: String,
 ) -> Result<String, String> {
-    use base64::Engine;
+    off_thread(move || {
+        use base64::Engine;
 
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data.as_bytes())
-        .map_err(|e| format!("Could not read the dropped file: {}", e))?;
+        let vault = app_handle.state::<Vault>();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|e| format!("Could not read the dropped file: {}", e))?;
 
-    let directory = preferred_directory(Path::new(&directory));
-    let directory = within_vault_to_write(&vault, &directory)?;
-    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+        let directory = preferred_directory(Path::new(&directory));
+        let directory = within_vault_to_write(&vault, &directory)?;
+        fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
 
-    // Checked again now that it exists: create_dir_all resolves nothing, and a
-    // media folder that is a symlink out of the vault would have passed above.
-    let directory = within_vault(&vault, &directory)?;
-    let path = unused_path(&directory, &safe_file_name(&name)?);
-    fs::write(&path, bytes).map_err(|e| e.to_string())?;
+        // Checked again now that it exists: create_dir_all resolves nothing,
+        // and a media folder that is a symlink out of the vault would have
+        // passed above.
+        let directory = within_vault(&vault, &directory)?;
+        let path = unused_path(&directory, &safe_file_name(&name)?);
+        fs::write(&path, bytes).map_err(|e| e.to_string())?;
 
-    Ok(path.to_string_lossy().into_owned())
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
 }
 
 #[tauri::command]
-fn read_file(vault: tauri::State<Vault>, path: String) -> Result<String, String> {
-    let path = within_vault(&vault, Path::new(&path))?;
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    // Where the note stood when it was read, so a later write can tell whether
-    // anything else has been at it in the meantime.
-    remember(&vault, &path);
-    Ok(content)
+async fn read_file(app_handle: tauri::AppHandle, path: String) -> Result<String, String> {
+    off_thread(move || {
+        let vault = app_handle.state::<Vault>();
+        let path = within_vault(&vault, Path::new(&path))?;
+        let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        // Where the note stood when it was read, so a later write can tell
+        // whether anything else has been at it in the meantime.
+        remember(&vault, &path);
+        Ok(content)
+    })
+    .await
 }
 
 /// Writes `bytes` to `path` without ever leaving what is already there half
@@ -688,21 +747,25 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// `force` is the answer to that refusal, and only ever comes from someone
 /// being asked which copy they want to keep.
 #[tauri::command]
-fn write_file(
-    vault: tauri::State<Vault>,
+async fn write_file(
+    app_handle: tauri::AppHandle,
     path: String,
     content: String,
     force: Option<bool>,
 ) -> Result<(), String> {
-    let path = within_vault_to_write(&vault, Path::new(&path))?;
+    off_thread(move || {
+        let vault = app_handle.state::<Vault>();
+        let path = within_vault_to_write(&vault, Path::new(&path))?;
 
-    if !force.unwrap_or(false) && changed_since_read(&vault, &path) {
-        return Err(CHANGED_ON_DISK.to_string());
-    }
+        if !force.unwrap_or(false) && changed_since_read(&vault, &path) {
+            return Err(CHANGED_ON_DISK.to_string());
+        }
 
-    write_atomically(&path, content.as_bytes())?;
-    remember(&vault, &path);
-    Ok(())
+        write_atomically(&path, content.as_bytes())?;
+        remember(&vault, &path);
+        Ok(())
+    })
+    .await
 }
 
 /// True for legacy symbol-encoded fonts (Wingdings, Webdings, ...), which map
@@ -811,6 +874,10 @@ fn apply_transparency(window: &tauri::WebviewWindow, enabled: bool) -> Result<bo
 
 /// Tauri command wrapper around [`apply_transparency`] for toggling the
 /// effect at runtime from the frontend's settings panel.
+///
+/// One of the two commands that stays on the main thread deliberately: it is
+/// the window it is changing, and a window is the main thread's to touch.
+/// There is no IO here to be slow about either.
 #[tauri::command]
 fn set_transparency(window: tauri::WebviewWindow, enabled: bool) -> Result<bool, String> {
     apply_transparency(&window, enabled)
@@ -930,6 +997,9 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<Wry>> {
 /// tab, so rebinding it in Settings moves the menu's key equivalent with it.
 /// A binding the menu bar cannot express leaves the item without one, and the
 /// webview handles the key itself.
+///
+/// The other command that stays on the main thread: it is the menu bar it is
+/// changing, and that belongs to the main thread as much as the window does.
 #[tauri::command]
 fn set_close_tab_shortcut(
     #[allow(unused_variables)] app: tauri::AppHandle,
