@@ -556,15 +556,39 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     [forgetRecovered]
   );
 
+  /**
+   * Which request for a note is the one still being waited on.
+   *
+   * Opening a note that is not already in memory costs a read, and two clicks
+   * in quick succession put two of those in flight at once. Whichever came
+   * back last used to be the one applied - so clicking a large note and then
+   * a small one left the editor on the large one, because the small one was
+   * read and opened while the large one was still coming.
+   *
+   * Every call takes a number on the way in and checks it is still the latest
+   * on the way out. The one that is not has been overtaken, and the note
+   * somebody asked for most recently is the note they get.
+   */
+  const selectionRef = useRef(0);
+
   const selectFile = useCallback(
     async (path: string) => {
       try {
         if (path === currentFileRef.current) return;
 
+        const mine = ++selectionRef.current;
+
         // Only a document that has never been opened costs a read; everything
         // else is already sitting in memory as editor state.
         const firstRead = !isDocumentOpen(path);
         const content = firstRead ? await invoke<string>("read_file", { path }) : null;
+
+        // Overtaken while that read was happening. Dropped rather than opened
+        // quietly in the background: `open` swaps what the editor is showing,
+        // so applying this now would put a note on screen that nobody is
+        // asking for any more.
+        if (mine !== selectionRef.current) return;
+
         openDocument(path, content);
 
         // "The next time that note is opened" is this: a tab being switched
