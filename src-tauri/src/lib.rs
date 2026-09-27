@@ -633,10 +633,15 @@ fn not_supported(error: &std::io::Error) -> bool {
     {
         // ENOSYS: the kernel has no such call. EINVAL / ENOTSUP / EOPNOTSUPP:
         // it has it, and this filesystem does not implement the flag.
+        //
+        // EOPNOTSUPP is compared rather than matched because on Linux it is
+        // the same number as ENOTSUP, and two patterns for one value is an
+        // unreachable arm there while being two distinct values on macOS.
+        let code = error.raw_os_error();
         matches!(
-            error.raw_os_error(),
-            Some(libc::ENOSYS) | Some(libc::EINVAL) | Some(libc::ENOTSUP) | Some(libc::EOPNOTSUPP)
-        )
+            code,
+            Some(libc::ENOSYS) | Some(libc::EINVAL) | Some(libc::ENOTSUP)
+        ) || code == Some(libc::EOPNOTSUPP)
     }
     #[cfg(not(unix))]
     {
