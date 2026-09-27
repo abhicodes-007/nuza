@@ -55,8 +55,8 @@ export default function ConfirmDeleteModal({ target, onConfirm, onCancel }: Conf
         <h2 className="text-sm font-semibold text-white">Delete {isDirectory ? "folder" : "file"}</h2>
         <p className="mt-2 text-sm text-zinc-400">
           Are you sure you want to delete <span className="text-zinc-200">"{name}"</span>?
-          {isDirectory && " Everything in it goes too."} It moves to the {trashName()}, so you can put it back
-          from there.
+          {isDirectory && " Everything in it goes too."} It moves to the {trashName()}, where you can get it
+          back.
         </p>
         <div className="mt-4 flex justify-end gap-2">
           <button

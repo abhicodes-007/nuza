@@ -637,7 +637,7 @@ async fn delete_entry(app_handle: tauri::AppHandle, path: String) -> Result<(), 
         // undo anywhere in this app - the confirm dialog was the only thing
         // between a misclick and work that is simply gone. The OS has an undo
         // for exactly this, and it is the one people already know how to use.
-        trash::delete(&p).map_err(|error| error.to_string())
+        trashing().delete(&p).map_err(|error| error.to_string())
     })
     .await
 }
@@ -753,6 +753,34 @@ fn exact_file_name(name: &str) -> Result<String, String> {
         return Err(format!("\"{}\" is not a name a file can have", trimmed));
     }
     Ok(trimmed.to_string())
+}
+
+/// How a file gets to the Trash.
+///
+/// On macOS the crate's default is to ask Finder to do it, over AppleScript.
+/// That works, and it costs the first delete a "nuza wants access to control
+/// Finder" prompt from the system - which is an alarming thing to be shown
+/// for deleting a note, and which somebody is quite likely to refuse. Refused,
+/// every delete afterwards does nothing at all.
+///
+/// Asking the system framework directly needs no permission and cannot be
+/// turned off. The note lands in the same Trash either way. What is given up
+/// is Finder's "Put Back" menu item, which macOS does not always offer for
+/// files trashed this way - dragging one out of the Trash still works, and a
+/// delete that always happens is worth more than the tidier way of undoing it.
+#[cfg(target_os = "macos")]
+fn trashing() -> trash::TrashContext {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+    let mut context = trash::TrashContext::default();
+    context.set_delete_method(DeleteMethod::NsFileManager);
+    context
+}
+
+/// Everywhere else the default asks for nothing and is the right one.
+#[cfg(not(target_os = "macos"))]
+fn trashing() -> trash::TrashContext {
+    trash::TrashContext::default()
 }
 
 /// Renames `from` to `to`, refusing rather than replacing when `to` is taken.
