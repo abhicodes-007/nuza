@@ -125,6 +125,42 @@ function parseAlignment(delimiterRow: string): TableAlignment[] {
 }
 
 /**
+ * The cells of one table row, empty ones included.
+ *
+ * The parser only makes a node for a cell with something in it: `| a |  | c |`
+ * is three cells to anyone reading it and two `TableCell`s to the tree, which
+ * drew `c` under the second column and left nowhere to type into the gap. So
+ * the cells are the stretches between the row's pipes - not counting before a
+ * leading pipe or after a trailing one - and an empty stretch is a cell with
+ * no text, placed just after the space a pipe is usually padded with.
+ */
+function rowCells(doc: Text, row: SyntaxNode, origin: number): TableRow["cells"] {
+  const pipes: SyntaxNode[] = [];
+  const filled: SyntaxNode[] = [];
+  for (let node = row.firstChild; node; node = node.nextSibling) {
+    if (node.name === "TableDelimiter") pipes.push(node);
+    else if (node.name === "TableCell") filled.push(node);
+  }
+
+  const stretches: [number, number][] = [];
+  let start = row.from;
+  for (const pipe of pipes) {
+    stretches.push([start, pipe.from]);
+    start = pipe.to;
+  }
+  stretches.push([start, row.to]);
+  if (pipes.length && pipes[0].from === row.from) stretches.shift();
+  if (pipes.length && pipes[pipes.length - 1].to === row.to) stretches.pop();
+
+  return stretches.map(([from, to]) => {
+    const cell = filled.find((node) => node.from >= from && node.to <= to);
+    if (cell) return { text: doc.sliceString(cell.from, cell.to), offset: cell.from - origin };
+    const at = to > from && doc.sliceString(from, from + 1) === " " ? from + 1 : from;
+    return { text: "", offset: at - origin };
+  });
+}
+
+/**
  * Pulls a GFM table out of the syntax tree. Returns null for tables nested
  * inside a quote or a list item, where replacing whole lines would swallow the
  * enclosing markup along with the table.
@@ -144,12 +180,7 @@ function readTable(state: EditorState, table: SyntaxNode, origin: number) {
     }
     if (child.name !== "TableHeader" && child.name !== "TableRow") continue;
 
-    const cells = [];
-    for (let cell = child.firstChild; cell; cell = cell.nextSibling) {
-      if (cell.name !== "TableCell") continue;
-      cells.push({ text: state.doc.sliceString(cell.from, cell.to), offset: cell.from - origin });
-    }
-    rows.push({ cells, header: child.name === "TableHeader" });
+    rows.push({ cells: rowCells(state.doc, child, origin), header: child.name === "TableHeader" });
   }
 
   if (!rows.length) return null;
