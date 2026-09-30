@@ -4,6 +4,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "@uiw/codemirror-extensions-basic-setup";
 import { directoryOf, liveMarkdown, noteDirectory, vaultDirectory } from "@/lib/markdown";
+import { documentsToEvict } from "@/lib/documentCache";
 import { countDocument, DocumentStats, EMPTY_DOCUMENT_STATS } from "@/lib/documentStats";
 
 /**
@@ -43,6 +44,8 @@ interface UseDocumentsOptions {
   initialContent?: string;
   /** The open folder, where dropped and pasted files are filed. */
   vault: string;
+  /** The notes with a tab. Their documents are always kept. */
+  openPaths: readonly string[];
 }
 
 /**
@@ -69,8 +72,10 @@ export function useDocuments({
   initialPath,
   initialContent = "",
   vault,
+  openPaths,
 }: UseDocumentsOptions) {
   const container = useRef<HTMLDivElement>(null);
+  /** Every document held, least recently shown first. */
   const states = useRef(new Map<string, EditorState>());
   /** The editor, as a ref for callbacks and as state for effects that follow it. */
   const editor = useRef<EditorView | null>(null);
@@ -95,6 +100,34 @@ export function useDocuments({
   /** Set while a document is being swapped in, so the swap is not read as an edit. */
   const swapping = useRef(false);
   const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(() => new Set());
+  const latestDirty = useRef(dirtyPaths);
+  const latestOpen = useRef(openPaths);
+
+  /**
+   * Lets go of the documents nobody needs, past a limit: closed, saved, and
+   * not looked at in a while. Reopening one of those is a read from disk,
+   * which is where its text is anyway - what goes is its undo history.
+   *
+   * A tab, a note with unsaved edits and the note on screen are never let go
+   * of, so a closed tab with edits in it still comes back with them. So is the
+   * scratch note, which has no file to come back from.
+   */
+  const evict = useCallback(() => {
+    const open = new Set(latestOpen.current);
+    const keep = (path: string) =>
+      path === currentPath.current || path === initialPath || open.has(path) || latestDirty.current.has(path);
+
+    for (const path of documentsToEvict(states.current.keys(), keep)) states.current.delete(path);
+  }, [initialPath]);
+
+  // Tracked in a layout effect so the next eviction sees a keystroke's dirty
+  // flag before anything else can run, and rerun when either list shrinks - a
+  // tab closing or a note being saved can both leave a document unneeded.
+  useLayoutEffect(() => {
+    latestDirty.current = dirtyPaths;
+    latestOpen.current = openPaths;
+    evict();
+  }, [dirtyPaths, openPaths, evict]);
 
   // Statistics are pushed to whoever is showing them rather than held as state
   // here: the footer changes on every keystroke, and nothing else should have
@@ -233,11 +266,16 @@ export function useDocuments({
 
       swapping.current = true;
       // The live state lives in the view, not the map, so park it before it is
-      // replaced - this is a reference, not a copy of the text.
+      // replaced - this is a reference, not a copy of the text. Re-inserted
+      // rather than updated, so the map's order stays the order of use.
+      states.current.delete(currentPath.current);
       states.current.set(currentPath.current, view.state);
       currentPath.current = path;
 
-      view.setState(stateFor(path, content ?? ""));
+      const next = stateFor(path, content ?? "");
+      states.current.delete(path);
+      states.current.set(path, next);
+      view.setState(next);
       view.dispatch({
         effects: [
           preferences.reconfigure(latestSettings.current),
@@ -247,11 +285,12 @@ export function useDocuments({
       swapping.current = false;
       setViewGeneration((generation) => generation + 1);
       reportStats(view.state);
+      evict();
       // Opening a note is a request to write in it, so the caret goes there
       // rather than leaving the sidebar holding focus.
       view.focus();
     },
-    [stateFor, reportStats]
+    [stateFor, reportStats, evict]
   );
 
   /**

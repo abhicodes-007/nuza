@@ -102,6 +102,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     initialPath: UNTITLED_FILE,
     initialContent: keptScratch,
     vault: rootPath ?? "",
+    openPaths,
   });
 
   // Vim's `:w` command runs outside of React, from a closure captured once
