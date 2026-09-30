@@ -145,3 +145,36 @@ describe("inline styles", () => {
     expect(await styleOf('<div style="">x</div>')).toBeNull();
   });
 });
+
+describe("renderHtml", () => {
+  test("hands out a fresh copy each time", async () => {
+    const { renderHtml } = await import("../src/lib/markdown/sanitize");
+    const first = renderHtml("<b>once</b>", "/vault");
+    const second = renderHtml("<b>once</b>", "/vault");
+    expect(first).not.toBe(second);
+
+    // Inserting one copy must leave the next one whole.
+    document.createElement("div").appendChild(first);
+    expect(renderHtml("<b>once</b>", "/vault").textContent).toBe("once");
+  });
+
+  test("keys on the directory as well as the source", async () => {
+    const { renderHtml } = await import("../src/lib/markdown/sanitize");
+    // A relative src is resolved through Tauri, which is not here to ask.
+    const internals = { convertFileSrc: (path: string) => `media://${path}` };
+    Object.assign(globalThis, { window: { __TAURI_INTERNALS__: internals } });
+
+    const a = document.createElement("div");
+    const b = document.createElement("div");
+    a.appendChild(renderHtml('<img src="x.png">', "/one"));
+    b.appendChild(renderHtml('<img src="x.png">', "/two"));
+    expect(a.innerHTML).not.toBe(b.innerHTML);
+    Reflect.deleteProperty(globalThis, "window");
+  });
+
+  test("reports a run that sanitises to nothing", async () => {
+    const { rendersHtml } = await import("../src/lib/markdown/sanitize");
+    expect(rendersHtml("<script>alert(1)</script>", "/vault")).toBe(false);
+    expect(rendersHtml("<b>kept</b>", "/vault")).toBe(true);
+  });
+});

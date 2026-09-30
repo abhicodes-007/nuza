@@ -3,7 +3,7 @@ import { EditorState, Range, StateField, Text } from "@codemirror/state";
 import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import { FrontmatterRange, frontmatterRange, readFrontmatter } from "./frontmatter";
-import { rendersAnything, sanitizeHtml } from "./sanitize";
+import { rendersHtml } from "./sanitize";
 import { noteDirectory, resolveImageSource, safeExternalHref } from "./sources";
 import {
   BulletWidget,
@@ -212,31 +212,65 @@ type Build = {
    * have to be skipped by position instead of by returning false.
    */
   coveredUntil: number;
+  /**
+   * Where each opening tag's partner ends, by the opener's start, for every
+   * run of inline HTML paired so far in this build. Keyed by the parent's
+   * span, since that is what holds the run.
+   */
+  tagPairs: Map<string, Map<number, number>>;
 };
 
+const OPENING_TAG = /^<([a-zA-Z][\w-]*)(\s|>|\/)/;
+const CLOSING_TAG = /^<\/([a-zA-Z][\w-]*)\s*>$/;
+
 /**
- * The end of the tag that closes `<tag>`, searching forward through siblings
- * and counting nesting, or -1 when the run is unbalanced - in which case it is
- * left as plain text rather than guessed at.
+ * Every opening tag among `parent`'s children matched to the end of the tag
+ * that closes it, nesting counted per tag name. One pass over the run: a
+ * search forward from each opener would walk the rest of the run once per
+ * tag in it. An opener with no partner is left out, and so is left as plain
+ * text rather than guessed at.
  */
-function findClosingTag(doc: Text, open: SyntaxNode, tag: string) {
-  const opening = new RegExp(`^<${tag}(\\s|>|/)`, "i");
-  const closing = new RegExp(`^</${tag}\\s*>$`, "i");
-  let depth = 1;
+export function pairTags(doc: Text, parent: SyntaxNode) {
+  const pairs = new Map<number, number>();
+  const open = new Map<string, number[]>();
 
-  for (let sibling = open.nextSibling; sibling; sibling = sibling.nextSibling) {
-    if (sibling.name !== "HTMLTag") continue;
-    const text = doc.sliceString(sibling.from, sibling.to);
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (child.name !== "HTMLTag") continue;
+    const text = doc.sliceString(child.from, child.to);
 
-    if (closing.test(text)) {
-      depth--;
-      if (depth === 0) return sibling.to;
-    } else if (opening.test(text) && !text.endsWith("/>")) {
-      depth++;
+    const closing = CLOSING_TAG.exec(text);
+    if (closing) {
+      const start = open.get(closing[1].toLowerCase())?.pop();
+      if (start !== undefined) pairs.set(start, child.to);
+      continue;
     }
+
+    const opening = OPENING_TAG.exec(text);
+    if (!opening || text.endsWith("/>")) continue;
+    const tag = opening[1].toLowerCase();
+    if (VOID_TAGS.has(tag)) continue;
+
+    const stack = open.get(tag);
+    if (stack) stack.push(child.from);
+    else open.set(tag, [child.from]);
   }
 
-  return -1;
+  return pairs;
+}
+
+/** The end of the tag that closes the one at `open`, or -1 when there is none. */
+function findClosingTag(build: Build, open: SyntaxNode) {
+  const parent = open.parent;
+  if (!parent) return -1;
+
+  const key = `${parent.from}:${parent.to}`;
+  let pairs = build.tagPairs.get(key);
+  if (!pairs) {
+    pairs = pairTags(build.state.doc, parent);
+    build.tagPairs.set(key, pairs);
+  }
+
+  return pairs.get(open.from) ?? -1;
 }
 
 function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
@@ -421,7 +455,7 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
     if (isBeingEdited(state, from, to)) return false;
 
     const html = doc.sliceString(from, to);
-    if (!rendersAnything(sanitizeHtml(html, directory))) return false;
+    if (!rendersHtml(html, directory)) return false;
 
     out.push(
       Decoration.replace({
@@ -438,11 +472,11 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
     // A closing tag is reached through its opener; on its own it is nothing.
     if (!tag) return;
 
-    const end = source.endsWith("/>") || VOID_TAGS.has(tag) ? to : findClosingTag(doc, node.node, tag);
+    const end = source.endsWith("/>") || VOID_TAGS.has(tag) ? to : findClosingTag(build, node.node);
     if (end < 0 || isBeingEdited(state, from, end)) return;
 
     const html = doc.sliceString(from, end);
-    if (!rendersAnything(sanitizeHtml(html, directory))) return;
+    if (!rendersHtml(html, directory)) return;
 
     out.push(Decoration.replace({ widget: new HtmlWidget(html, directory, false) }).range(from, end));
     build.coveredUntil = end;
@@ -510,6 +544,7 @@ function decorationsIn(state: EditorState, from: number, to: number) {
     out: [],
     coveredUntil: -1,
     frontmatterEnd: -1,
+    tagPairs: new Map(),
   };
 
   const front = frontmatterRange(state.doc);
