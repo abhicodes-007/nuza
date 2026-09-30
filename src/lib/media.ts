@@ -89,26 +89,50 @@ export function pastedName(type: string) {
 }
 
 /**
- * Base64, built in chunks - spreading a whole image into `fromCharCode` at once
- * overflows the argument list somewhere north of a hundred thousand pixels.
+ * The largest file that can be dropped or pasted into a note.
+ *
+ * A dropped file has no path the app can see - the webview hands over its
+ * bytes, not where they came from - so all of it is read into the page before
+ * it can go anywhere. Past this it is a video, not an attachment, and reading
+ * it in whole is how the window hangs or runs out of memory.
  */
-function toBase64(bytes: Uint8Array) {
-  const CHUNK = 0x8000;
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK));
-  }
-  return btoa(binary);
+export const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+/** A size the way a person would say it: "312 MB". */
+export function formatSize(bytes: number) {
+  const megabytes = bytes / (1024 * 1024);
+  if (megabytes >= 1) return `${megabytes >= 10 ? Math.round(megabytes) : megabytes.toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** Why `file` cannot be attached, or null when it can. */
+export function attachmentProblem(file: Blob) {
+  if (file.size <= MAX_ATTACHMENT_BYTES) return null;
+  return `it is ${formatSize(file.size)}, and files over ${formatSize(MAX_ATTACHMENT_BYTES)} can't be added`;
 }
 
 /**
  * Writes a dropped or pasted file into `directory`, returning the path it
  * actually landed at - the name is taken as a suggestion, and the backend
  * renames rather than overwrite anything already sitting there.
+ *
+ * The bytes go across as they are, as the body of the request, rather than
+ * as base64 inside JSON: no string four thirds the size of the file built on
+ * the thread drawing the window, and nothing to decode on the other side.
+ * The directory and name ride in headers, which only carry ASCII, so they
+ * are percent-encoded there.
  */
 export async function writeMedia(directory: string, name: string, file: Blob) {
+  const problem = attachmentProblem(file);
+  if (problem) throw new Error(problem);
+
   const bytes = new Uint8Array(await file.arrayBuffer());
-  return invoke<string>("write_media", { directory, name, data: toBase64(bytes) });
+  return invoke<string>("write_media", bytes, {
+    headers: {
+      "x-nuza-directory": encodeURIComponent(directory),
+      "x-nuza-name": encodeURIComponent(name),
+    },
+  });
 }
 
 /** Broadcast after a file lands on disk, so the sidebar can show it. */

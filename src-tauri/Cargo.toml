@@ -30,7 +30,6 @@ tauri-plugin-updater = "2.12.0"
 tauri-plugin-process = "2"
 fontdb = "0.24.0"
 ttf-parser = "0.25"
-base64 = "0.22"
 # Notes are written to a temporary file and renamed over the target, so a
 # crash mid-save cannot truncate one.
 tempfile = "3"
