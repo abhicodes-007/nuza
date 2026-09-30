@@ -106,6 +106,7 @@ function App() {
     saveDirty,
     flush,
     selectFile,
+    openAt,
     closeFile,
     cycleFile,
     switchToRecent,
@@ -381,6 +382,7 @@ function App() {
               rootPath={rootPath}
               onOpenFolder={openFolder}
               onFileSelect={selectFile}
+              onOpenAt={(path, line, column) => void openAt(path, line, column)}
               currentFile={currentFile}
               onCreateFile={createFile}
               onCreateFolder={createFolder}

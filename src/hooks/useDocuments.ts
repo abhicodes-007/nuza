@@ -331,6 +331,9 @@ export function useDocuments({
     [stateFor, reportStats]
   );
 
+  /** The path of the document the editor is showing right now. */
+  const showing = useCallback(() => currentPath.current, []);
+
   /** Whether `path` has already been read off disk. */
   const isOpen = useCallback((path: string) => states.current.has(path), []);
 
@@ -404,6 +407,7 @@ export function useDocuments({
     subscribeToStats,
     open,
     replace,
+    showing,
     isOpen,
     read,
     revision,
