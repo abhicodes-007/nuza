@@ -1247,6 +1247,51 @@ async fn write_media(
     .await
 }
 
+/// Copies the file at `path` beside itself, numbered the way a file manager
+/// numbers a copy - "note.md" becomes "note 1.md", then "note 2.md" - and
+/// returns where the copy landed. The copy is created with `create_unused`,
+/// so it can never land on top of a file that appeared in the meantime, and
+/// it takes the original's permissions. Folders are not duplicated.
+#[tauri::command]
+async fn duplicate_entry(app_handle: tauri::AppHandle, path: String) -> Result<String, String> {
+    off_thread(move || {
+        let vault = app_handle.state::<Vault>();
+        let source = within_vault(&vault, Path::new(&path))?;
+        duplicate_file(&source).map(|copy| copy.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+fn duplicate_file(source: &Path) -> Result<PathBuf, String> {
+    let metadata = fs::metadata(source).map_err(|e| e.to_string())?;
+    if metadata.is_dir() {
+        return Err("Folders can't be duplicated yet".to_string());
+    }
+
+    let directory = source
+        .parent()
+        .ok_or_else(|| "The file has no folder to put a copy in".to_string())?;
+    let name = source
+        .file_name()
+        .ok_or_else(|| "The file has no name".to_string())?
+        .to_string_lossy();
+
+    let (mut copy, copy_path) = create_unused(directory, &name)?;
+    let written = fs::File::open(source)
+        .and_then(|mut original| std::io::copy(&mut original, &mut copy))
+        .and_then(|_| copy.sync_all());
+    if let Err(error) = written {
+        // Half a copy is worse than none.
+        drop(copy);
+        let _ = fs::remove_file(&copy_path);
+        return Err(error.to_string());
+    }
+    drop(copy);
+    let _ = fs::set_permissions(&copy_path, metadata.permissions());
+
+    Ok(copy_path)
+}
+
 /// The lines of the open vault's notes that contain `query`, ignoring case.
 #[tauri::command]
 async fn search_contents(
@@ -1756,6 +1801,7 @@ pub fn run() {
             open_folder,
             read_file,
             search_contents,
+            duplicate_entry,
             write_file,
             write_media,
             keep_recovery,
@@ -2616,5 +2662,42 @@ mod tests {
         found.sort();
         assert_eq!(found, ["a.md", "b.MD"]);
         assert!(search_vault(dir.path(), "   ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn duplicates_a_note_beside_itself_numbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("note.md");
+        fs::write(&note, "hello").unwrap();
+
+        let first = duplicate_file(&note).unwrap();
+        let second = duplicate_file(&note).unwrap();
+
+        assert_eq!(first, dir.path().join("note 1.md"));
+        assert_eq!(second, dir.path().join("note 2.md"));
+        assert_eq!(contents(&first), "hello");
+        assert_eq!(contents(&note), "hello");
+    }
+
+    #[test]
+    fn refuses_to_duplicate_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(duplicate_file(dir.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_duplicate_keeps_the_originals_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("private.md");
+        fs::write(&note, "x").unwrap();
+        fs::set_permissions(&note, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let copy = duplicate_file(&note).unwrap();
+        assert_eq!(
+            fs::metadata(copy).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }

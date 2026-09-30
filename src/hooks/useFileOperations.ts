@@ -721,6 +721,23 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     [selectFile]
   );
 
+  /**
+   * Copies a note beside itself as "name 1.md" and opens the copy. Edits not
+   * yet written are written first, so the copy is of the note as it stands
+   * rather than as it was at the last autosave - unless the note is waiting
+   * on a changed-on-disk decision, which a duplicate is no reason to make.
+   */
+  const duplicateEntry = useCallback(
+    async (path: string) => {
+      if (dirtyPathsRef.current.has(path) && !conflictsRef.current.has(path)) await writeDocument(path);
+      const copy = await invoke<string>("duplicate_entry", { path });
+      const entry = { name: fileNameOf(copy), path: copy, isDirectory: false };
+      setFolderData((tree) => addEntry(tree, rootPathRef.current ?? "", entry));
+      await selectFile(copy);
+    },
+    [writeDocument, selectFile]
+  );
+
   const createFolder = useCallback(async (parentPath: string, name: string) => {
     await invoke("create_folder", { parentPath, name });
     const entry = { name, path: joinPath(parentPath, name), isDirectory: true, children: [] };
@@ -802,6 +819,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     createFile,
     createFolder,
     renameEntry,
+    duplicateEntry,
     moveEntry,
     deleteEntry,
     attachFiles,
