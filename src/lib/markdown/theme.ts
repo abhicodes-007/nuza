@@ -445,6 +445,24 @@ const editorTheme = EditorView.theme(
       transition: "color 120ms ease",
     },
     ".cm-md-prop-add:hover": { color: ink.accent },
+    /* Inside the table's wrapper, whose padding keeps this margin from
+       reaching the widget's own box - a margin there would put everything
+       below the table out of step with where the editor thinks it is. */
+    ".cm-md-table-add": {
+      display: "block",
+      margin: "0.35em 0 0",
+      padding: "0.16em 0.3em",
+      border: "none",
+      background: "none",
+      font: "inherit",
+      fontSize: "0.85em",
+      color: ink.muted,
+      cursor: "pointer",
+      opacity: "0",
+      transition: "opacity 120ms ease, color 120ms ease",
+    },
+    ".cm-md-table-wrap:hover .cm-md-table-add, .cm-md-table-add:focus-visible": { opacity: "1" },
+    ".cm-md-table-add:hover": { color: ink.accent },
 
     /* The same block with the caret in it: the YAML behind the properties,
        left as plain text rather than read as markdown. */

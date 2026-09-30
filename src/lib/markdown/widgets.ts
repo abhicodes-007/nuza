@@ -1,8 +1,21 @@
+import { syntaxTree } from "@codemirror/language";
 import { EditorView, WidgetType } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 import { areaField, refresh, textField } from "./fields";
 import { Property, frontmatterRange, readFrontmatter } from "./frontmatter";
 import { renderHtml } from "./sanitize";
 import { safeExternalHref } from "./sources";
+import { showPopupMenu } from "./popupMenu";
+import {
+  TableModel,
+  cellAt,
+  deleteColumn,
+  deleteRow,
+  formatTable,
+  insertColumn,
+  insertRow,
+  parseTable,
+} from "./tableEdit";
 
 /**
  * Emphasis, code, strikethrough and links, in that order of precedence. Only
@@ -323,6 +336,87 @@ export class TableWidget extends WidgetType {
     field.select();
   }
 
+  /** The whole table's source, from the start of its first line to the end of its last. */
+  private tableRange(view: EditorView, wrapper: HTMLElement) {
+    const start = view.posAtDOM(wrapper);
+    for (
+      let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(start, 1);
+      node;
+      node = node.parent
+    ) {
+      if (node.name === "Table") {
+        const doc = view.state.doc;
+        return { from: doc.lineAt(node.from).from, to: doc.lineAt(node.to).to };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Rewrites the table with `change` made to it, and puts a field in the cell
+   * at `focus` in the table that comes back - a new row or column is there to
+   * be typed into. The table is found again by where it starts, which a
+   * change to the table itself never moves.
+   */
+  private restructure(
+    view: EditorView,
+    wrapper: HTMLElement,
+    change: (model: TableModel) => TableModel,
+    focus?: { row: number; column: number }
+  ) {
+    const range = this.tableRange(view, wrapper);
+    if (!range) return;
+    const model = parseTable(view.state.sliceDoc(range.from, range.to));
+    if (!model) return;
+
+    const next = change(model);
+    const insert = formatTable(next);
+    if (insert === view.state.sliceDoc(range.from, range.to)) return;
+    view.dispatch({ changes: { from: range.from, to: range.to, insert }, userEvent: "input.table" });
+
+    if (!focus) return;
+    requestAnimationFrame(() => {
+      const table = Array.from(view.dom.querySelectorAll<HTMLElement>(".cm-md-table-wrap")).find(
+        (candidate) => view.posAtDOM(candidate) === range.from
+      );
+      const columns = next.header.length;
+      const cell =
+        table?.querySelectorAll<HTMLElement>("[data-offset]")[(focus.row + 1) * columns + focus.column];
+      // Through the table's own handler, which is what turns a cell into a field.
+      cell?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    });
+  }
+
+  /** The row and column edits for the cell that was right-clicked. */
+  private openCellMenu(view: EditorView, wrapper: HTMLElement, cell: HTMLElement, event: MouseEvent) {
+    const range = this.tableRange(view, wrapper);
+    if (!range) return;
+    const source = view.state.sliceDoc(range.from, range.to);
+    const model = parseTable(source);
+    const at = cellAt(source, Number(cell.dataset.offset));
+    if (!model || !at) return;
+
+    const { row, column } = at;
+    const edit = (change: (m: TableModel) => TableModel, focus?: { row: number; column: number }) => () =>
+      this.restructure(view, wrapper, change, focus);
+
+    showPopupMenu(event.clientX, event.clientY, [
+      ...(row >= 0
+        ? [{ label: "Insert Row Above", onSelect: edit((m) => insertRow(m, row), { row, column }) }]
+        : []),
+      { label: "Insert Row Below", onSelect: edit((m) => insertRow(m, row + 1), { row: row + 1, column }) },
+      { label: "Insert Column Left", onSelect: edit((m) => insertColumn(m, column), { row, column }) },
+      {
+        label: "Insert Column Right",
+        onSelect: edit((m) => insertColumn(m, column + 1), { row, column: column + 1 }),
+      },
+      ...(row >= 0 ? [{ label: "Delete Row", danger: true, onSelect: edit((m) => deleteRow(m, row)) }] : []),
+      ...(model.header.length > 1
+        ? [{ label: "Delete Column", danger: true, onSelect: edit((m) => deleteColumn(m, column)) }]
+        : []),
+    ]);
+  }
+
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-wrap";
@@ -352,7 +446,35 @@ export class TableWidget extends WidgetType {
     if (body.childNodes.length) table.appendChild(body);
     wrapper.appendChild(table);
 
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "cm-md-table-add";
+    add.textContent = "+ Add row";
+    add.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const rows = this.rows.filter((row) => !row.header).length;
+      this.restructure(view, wrapper, (model) => insertRow(model, model.rows.length), {
+        row: rows,
+        column: 0,
+      });
+    });
+    wrapper.appendChild(add);
+
+    // Rows and columns, from the cell they are relative to. Kept from the
+    // editor's own menu, which has nothing to offer inside a table.
+    wrapper.addEventListener("contextmenu", (event) => {
+      const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-offset]");
+      if (!cell) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.openCellMenu(view, wrapper, cell, event);
+    });
+
     wrapper.addEventListener("mousedown", (event) => {
+      // The left button only: a right click is for the cell's menu, and
+      // opening the cell underneath it as well selected its text for nothing.
+      if (event.button !== 0) return;
       const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-offset]");
       if (!cell || cell.querySelector("input")) return;
 
@@ -360,8 +482,8 @@ export class TableWidget extends WidgetType {
       this.edit(view, wrapper, cell);
     });
 
-    // Adding or removing whole rows is a thing you do to the markdown rather
-    // than to a cell, so a double click still hands the table's source over.
+    // The table's source is still a double click away, for anything the
+    // menu does not do - alignment, above all.
     wrapper.addEventListener("dblclick", (event) => {
       const cell = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-offset]");
       if (!cell) return;
