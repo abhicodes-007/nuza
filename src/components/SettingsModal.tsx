@@ -24,6 +24,8 @@ interface SettingsModalProps {
   onClose: () => void;
   vimEnabled: boolean;
   setVimEnabled: (enabled: boolean) => void;
+  showLineNumbers: boolean;
+  setShowLineNumbers: (enabled: boolean) => void;
   appearance: Appearance;
   setAppearance: (change: Partial<Appearance>) => void;
   resetAppearance: () => void;
@@ -49,6 +51,8 @@ export default function SettingsModal({
   onClose,
   vimEnabled,
   setVimEnabled,
+  showLineNumbers,
+  setShowLineNumbers,
   appearance,
   setAppearance,
   resetAppearance,
@@ -130,7 +134,12 @@ export default function SettingsModal({
 
           <div className="flex-1 min-w-0 overflow-y-auto p-4">
             {activeSection === "general" && (
-              <GeneralSettings vimEnabled={vimEnabled} setVimEnabled={setVimEnabled} />
+              <GeneralSettings
+                vimEnabled={vimEnabled}
+                setVimEnabled={setVimEnabled}
+                showLineNumbers={showLineNumbers}
+                setShowLineNumbers={setShowLineNumbers}
+              />
             )}
 
             {activeSection === "appearance" && (

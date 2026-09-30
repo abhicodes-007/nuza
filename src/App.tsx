@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EditorView } from "@codemirror/view";
+import { EditorView, lineNumbers } from "@codemirror/view";
 import { invoke } from "@tauri-apps/api/core";
 import EditorHeader from "./components/EditorHeader";
 import StatusBar from "./components/StatusBar";
@@ -42,6 +42,7 @@ function App() {
   // Off by default: Vim is something you go and turn on, not something a note
   // taking app should assume about whoever just opened it.
   const [vimEnabled, setVimEnabled] = usePersistedState("vimEnabled", false);
+  const [showLineNumbers, setShowLineNumbers] = usePersistedState("showLineNumbers", false);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = usePersistedState("autoUpdateEnabled", true);
   const [editorFont, setEditorFont] = usePersistedState("editorFont", DEFAULT_EDITOR_FONT);
   const [editorFontSize, setEditorFontSize] = usePersistedState("editorFontSize", DEFAULT_EDITOR_FONT_SIZE);
@@ -75,8 +76,12 @@ function App() {
   // identity changes - rebuilding it every render would put the documents
   // through a reconfiguration on every keystroke.
   const editorPreferences = useMemo(
-    () => [...(vimExtension ? [vimExtension] : []), editorFontTheme],
-    [vimExtension, editorFontTheme]
+    () => [
+      ...(vimExtension ? [vimExtension] : []),
+      editorFontTheme,
+      ...(showLineNumbers ? [lineNumbers()] : []),
+    ],
+    [vimExtension, editorFontTheme, showLineNumbers]
   );
 
   const {
@@ -393,6 +398,8 @@ function App() {
         onClose={() => setIsSettingsOpen(false)}
         vimEnabled={vimEnabled}
         setVimEnabled={setVimEnabled}
+        showLineNumbers={showLineNumbers}
+        setShowLineNumbers={setShowLineNumbers}
         appearance={appearance}
         setAppearance={setAppearance}
         resetAppearance={resetAppearance}
