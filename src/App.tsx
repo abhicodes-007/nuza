@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EditorView, lineNumbers } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { invoke } from "@tauri-apps/api/core";
 import EditorHeader from "./components/EditorHeader";
 import StatusBar from "./components/StatusBar";
@@ -24,6 +24,7 @@ import { usePersistedState } from "./hooks/usePersistedState";
 import { useResizableSidebar } from "./hooks/useResizableSidebar";
 import { report } from "./lib/notices";
 import { addFrontmatter, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
+import { noteLineNumbers } from "./lib/markdown/lineGutter";
 import { isMacPlatform } from "./lib/platform";
 import {
   DEFAULT_EDITOR_FONT,
@@ -81,7 +82,7 @@ function App() {
     () => [
       ...(vimExtension ? [vimExtension] : []),
       editorFontTheme,
-      ...(showLineNumbers ? [lineNumbers()] : []),
+      ...(showLineNumbers ? [noteLineNumbers] : []),
     ],
     [vimExtension, editorFontTheme, showLineNumbers]
   );
