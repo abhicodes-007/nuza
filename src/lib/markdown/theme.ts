@@ -281,6 +281,11 @@ const editorTheme = EditorView.theme(
       cursor: "pointer",
       transition: "text-decoration-color 140ms ease",
     },
+    /* A link to a note rather than a page: the same link, drawn without the
+       underline's gap, so the two can be told apart at a glance. */
+    ".cm-md-wikilink": {
+      textDecorationStyle: "dotted",
+    },
     ".cm-md-link:hover": {
       textDecorationColor: ink.accent,
     },

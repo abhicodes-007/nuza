@@ -5,6 +5,7 @@ import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import { FrontmatterRange, frontmatterRange, readFrontmatter } from "./frontmatter";
 import { rendersHtml } from "./sanitize";
 import { noteDirectory, resolveImageSource, safeExternalHref } from "./sources";
+import { readWikiLink } from "./wikiLinks";
 import {
   BulletWidget,
   HtmlWidget,
@@ -439,6 +440,27 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
       out.push((isBeingEdited(state, from, to) ? DIMMED : HIDDEN).range(from, to));
     }
     return;
+  }
+
+  if (name === "WikiLink") {
+    const inner = doc.sliceString(from + 2, to - 2);
+    const { target, label } = readWikiLink(inner);
+    const link = Decoration.mark({
+      class: "cm-md-link cm-md-wikilink",
+      attributes: { "data-wikilink": target },
+    });
+
+    // Being edited, it is all there to edit, with the brackets dimmed.
+    if (isBeingEdited(state, from, to)) {
+      out.push(DIMMED.range(from, from + 2), DIMMED.range(to - 2, to), link.range(from + 2, to - 2));
+      return false;
+    }
+
+    // Otherwise the brackets go, and so does the target when a label stands
+    // in for it - what is left reads as a link.
+    const shown = label ? from + 2 + inner.indexOf("|") + 1 : from + 2;
+    out.push(HIDDEN.range(from, shown), link.range(shown, to - 2), HIDDEN.range(to - 2, to));
+    return false;
   }
 
   if (name === "Link" || name === "Autolink") {

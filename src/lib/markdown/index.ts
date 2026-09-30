@@ -14,6 +14,8 @@ import { attachments } from "./attachments";
 import { listIndent } from "./listIndent";
 import { continueListItem, insertNewLine } from "./lists";
 import { liveMarkdownPreview } from "./livePreview";
+import { noteDirectory } from "./sources";
+import { WikiLink, followWikiLink } from "./wikiLinks";
 import { nuzaEditorTheme } from "./theme";
 
 /**
@@ -22,11 +24,20 @@ import { nuzaEditorTheme } from "./theme";
  * bargain VS Code and Obsidian strike.
  */
 const openLinkOnModClick = EditorView.domEventHandlers({
-  mousedown(event) {
+  mousedown(event, view) {
     if (event.button !== 0) return false;
     if (!(isMacPlatform() ? event.metaKey : event.ctrlKey)) return false;
 
     const target = event.target as HTMLElement | null;
+
+    // A wiki-link is a note in the vault, opened in a tab rather than a browser.
+    const wiki = target?.closest<HTMLElement>("[data-wikilink]")?.dataset.wikilink;
+    if (wiki !== undefined) {
+      event.preventDefault();
+      followWikiLink({ target: wiki, fromDirectory: view.state.facet(noteDirectory) });
+      return true;
+    }
+
     const href = target?.closest<HTMLElement>("[data-href]")?.dataset.href;
     if (!href) return false;
 
@@ -67,7 +78,7 @@ export const liveMarkdown: Extension = [
   // `codeLanguages` is what gives a fenced block its own colours. Each grammar
   // is fetched the first time a block asks for it, so a note that never shows
   // code never pays for one.
-  markdown({ extensions: GFM, codeLanguages: languages, addKeymap: false }),
+  markdown({ extensions: [GFM, WikiLink], codeLanguages: languages, addKeymap: false }),
   markdownEditingKeymap,
   EditorView.lineWrapping,
   nuzaEditorTheme,
