@@ -118,44 +118,11 @@ const editorTheme = EditorView.theme(
       outline: "1px solid rgba(245, 201, 123, 0.35)",
       borderRadius: "2px",
     },
+    /* The match you are on, in the first accent, so it stands out from the
+       rest of them rather than only being a shade darker. */
     ".cm-searchMatch.cm-searchMatch-selected": {
-      backgroundColor: "rgba(245, 201, 123, 0.42)",
-    },
-
-    /* The find panel is CodeMirror's, and it arrives in CodeMirror's colours:
-       a mid-grey bar with borderless, transparent controls. Only the colours
-       are restated here - the layout is left to the base theme. */
-    ".cm-panels": {
-      backgroundColor: "var(--nuza-bg)",
-      color: ink.text,
-      fontSize: "12px",
-    },
-    ".cm-panels-bottom": { borderTop: `1px solid ${ink.hairline}` },
-    ".cm-panels-top": { borderBottom: `1px solid ${ink.hairline}` },
-    ".cm-panel.cm-search label": { color: ink.muted },
-    ".cm-panel.cm-search input:not([type=checkbox])": {
-      backgroundColor: ink.surface,
-      border: `1px solid ${ink.hairline}`,
-      borderRadius: "4px",
-      color: ink.text,
-      padding: "2px 6px",
-      outline: "none",
-    },
-    ".cm-panel.cm-search input:not([type=checkbox]):focus": { borderColor: ink.accent },
-    ".cm-panel.cm-search button": {
-      backgroundColor: ink.surface,
-      backgroundImage: "none",
-      border: `1px solid ${ink.hairline}`,
-      borderRadius: "4px",
-      color: ink.text,
-      cursor: "pointer",
-    },
-    ".cm-panel.cm-search button:hover": { borderColor: ink.accent },
-    ".cm-panel.cm-search button[name=close]": {
-      background: "none",
-      border: "none",
-      color: ink.muted,
-      cursor: "pointer",
+      backgroundColor: "var(--nuza-accent-wash)",
+      outline: "1px solid var(--nuza-accent-line)",
     },
 
     /* ---- Markdown syntax that is still visible ------------------------- */

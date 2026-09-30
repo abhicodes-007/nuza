@@ -14,6 +14,7 @@ import { attachments } from "./attachments";
 import { listIndent } from "./listIndent";
 import { continueListItem, insertNewLine } from "./lists";
 import { liveMarkdownPreview } from "./livePreview";
+import { findInNote } from "./searchPanel";
 import { noteDirectory } from "./sources";
 import { WikiLink, followWikiLink } from "./wikiLinks";
 import { nuzaEditorTheme } from "./theme";
@@ -83,6 +84,7 @@ export const liveMarkdown: Extension = [
   EditorView.lineWrapping,
   nuzaEditorTheme,
   liveMarkdownPreview,
+  findInNote,
   listIndent,
   openLinkOnModClick,
   attachments,
