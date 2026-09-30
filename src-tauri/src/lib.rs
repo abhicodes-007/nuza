@@ -21,6 +21,9 @@ struct FileEntry {
     path: String,
     #[serde(rename = "isDirectory")] // this ensures the JSON key is camel case
     is_directory: bool,
+    // Left off a file rather than sent as `null`: a large vault is mostly
+    // files, and the whole tree crosses the bridge as one string.
+    #[serde(skip_serializing_if = "Option::is_none")]
     children: Option<Vec<FileEntry>>,
 }
 
@@ -32,36 +35,82 @@ fn is_ignored(name: &str) -> bool {
     name.starts_with('.') || name == "node_modules"
 }
 
+/// How many folders deep a vault is read. Past this a folder is listed with
+/// nothing in it: no vault of notes goes this deep, and a walk that does has
+/// found a way around in circles that the checks below did not catch.
+const MAX_TREE_DEPTH: usize = 64;
+
+/// The vault's tree, read in full.
+///
+/// A symlink is not followed the way a folder is. `Path::is_dir` follows
+/// links, so a link back up the tree - `ln -s . loop` - was walked forever,
+/// until the stack ran out and took the app with it. A link to a folder is
+/// only followed when it lands inside the vault and not on a folder the walk
+/// is already inside; one that leads out is left out altogether, since every
+/// command here refuses a path outside the vault and its notes could only
+/// ever fail to open.
 fn read_dir_recursive(path: &Path) -> Result<Vec<FileEntry>, String> {
+    let root = path.canonicalize().map_err(|e| e.to_string())?;
+    let mut ancestors = vec![root.clone()];
+    read_tree(path, &root, &mut ancestors)
+}
+
+/// `path`'s entries, with `ancestors` holding the resolved folders the walk
+/// is inside, `path`'s own last.
+fn read_tree(
+    path: &Path,
+    root: &Path,
+    ancestors: &mut Vec<PathBuf>,
+) -> Result<Vec<FileEntry>, String> {
     let mut entries = Vec::new();
 
-    if path.is_dir() {
-        // Read the directory contents
-        for entry in fs::read_dir(path).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let entry_path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
+    for entry in fs::read_dir(path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let entry_path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
 
-            if is_ignored(&name) {
-                continue;
-            }
-
-            let is_directory = entry_path.is_dir();
-
-            // If it's a directory, recursively read its children
-            let children = if is_directory {
-                Some(read_dir_recursive(&entry_path)?)
-            } else {
-                None
-            };
-
-            entries.push(FileEntry {
-                name,
-                path: entry_path.to_string_lossy().into_owned(),
-                is_directory,
-                children,
-            });
+        if is_ignored(&name) {
+            continue;
         }
+
+        // `file_type` describes the entry itself, and does not follow a link.
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let resolved = if file_type.is_symlink() {
+            match fs::canonicalize(&entry_path) {
+                Ok(target) if target.is_dir() => {
+                    if !target.starts_with(root) || ancestors.contains(&target) {
+                        continue;
+                    }
+                    Some(target)
+                }
+                // A link to a file, or one that leads nowhere, is listed as
+                // the file it names - as it always was.
+                _ => None,
+            }
+        } else if file_type.is_dir() {
+            ancestors.last().map(|parent| parent.join(&name))
+        } else {
+            None
+        };
+
+        let is_directory = resolved.is_some();
+        let children = match resolved {
+            Some(folder) if ancestors.len() < MAX_TREE_DEPTH => {
+                ancestors.push(folder);
+                let children = read_tree(&entry_path, root, ancestors);
+                ancestors.pop();
+                Some(children?)
+            }
+            Some(_) => Some(Vec::new()),
+            None => None,
+        };
+
+        entries.push(FileEntry {
+            name,
+            path: entry_path.to_string_lossy().into_owned(),
+            is_directory,
+            children,
+        });
     }
 
     // Sort so directories appear first, then alphabetically
@@ -2188,5 +2237,104 @@ mod tests {
             other.to_str().unwrap(),
         )
         .is_err());
+    }
+
+    /// The names in a listing, folders marked with a trailing slash.
+    fn names(entries: &[FileEntry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|entry| {
+                if entry.is_directory {
+                    format!("{}/", entry.name)
+                } else {
+                    entry.name.clone()
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn reads_folders_first_then_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("b.md"), "").unwrap();
+        fs::write(dir.path().join("A.md"), "").unwrap();
+        fs::create_dir(dir.path().join("notes")).unwrap();
+        fs::write(dir.path().join("notes").join("inner.md"), "").unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+
+        let tree = read_dir_recursive(dir.path()).unwrap();
+        assert_eq!(names(&tree), ["notes/", "A.md", "b.md"]);
+        assert_eq!(names(tree[0].children.as_ref().unwrap()), ["inner.md"]);
+        assert!(tree[1].children.is_none());
+    }
+
+    /// Past the depth cap a folder is listed, with nothing read inside it.
+    #[test]
+    fn stops_reading_at_the_depth_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut deepest = dir.path().to_path_buf();
+        for _ in 0..MAX_TREE_DEPTH + 2 {
+            deepest.push("d");
+        }
+        fs::create_dir_all(&deepest).unwrap();
+
+        let tree = read_dir_recursive(dir.path()).unwrap();
+        let mut level: &[FileEntry] = &tree;
+        let mut depth = 1;
+        while let Some(children) = level.first().and_then(|entry| entry.children.as_deref()) {
+            if children.is_empty() {
+                break;
+            }
+            level = children;
+            depth += 1;
+        }
+        assert_eq!(depth, MAX_TREE_DEPTH);
+    }
+
+    /// `ln -s . loop` used to be walked until the stack overflowed.
+    #[cfg(unix)]
+    #[test]
+    fn leaves_out_a_link_back_up_the_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("notes")).unwrap();
+        fs::write(dir.path().join("notes").join("a.md"), "").unwrap();
+        std::os::unix::fs::symlink(dir.path(), dir.path().join("notes").join("up")).unwrap();
+        std::os::unix::fs::symlink(".", dir.path().join("loop")).unwrap();
+
+        let tree = read_dir_recursive(dir.path()).unwrap();
+        assert_eq!(names(&tree), ["notes/"]);
+        assert_eq!(names(tree[0].children.as_ref().unwrap()), ["a.md"]);
+    }
+
+    /// Nothing through a link out of the vault could be opened, so it is not listed.
+    #[cfg(unix)]
+    #[test]
+    fn leaves_out_a_link_to_a_folder_outside_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("secret.md"), "").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("out")).unwrap();
+
+        assert!(read_dir_recursive(dir.path()).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_a_link_to_another_folder_in_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("real")).unwrap();
+        fs::write(dir.path().join("real").join("a.md"), "").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("alias")).unwrap();
+        fs::write(dir.path().join("note.md"), "").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("note.md"), dir.path().join("linked.md"))
+            .unwrap();
+        std::os::unix::fs::symlink(dir.path().join("gone"), dir.path().join("broken.md")).unwrap();
+
+        let tree = read_dir_recursive(dir.path()).unwrap();
+        assert_eq!(
+            names(&tree),
+            ["alias/", "real/", "broken.md", "linked.md", "note.md"]
+        );
+        assert_eq!(names(tree[0].children.as_ref().unwrap()), ["a.md"]);
     }
 }
