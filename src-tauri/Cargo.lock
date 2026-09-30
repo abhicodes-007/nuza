@@ -2376,7 +2376,6 @@ dependencies = [
 name = "nuza"
 version = "0.1.14"
 dependencies = [
- "base64 0.22.1",
  "fontdb",
  "http-range",
  "libc",

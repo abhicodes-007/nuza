@@ -1039,25 +1039,47 @@ fn preferred_directory(directory: &Path) -> std::path::PathBuf {
     directory.to_path_buf()
 }
 
-/// Writes a dropped or pasted file into `directory`, creating it if it is not
-/// there yet. The bytes arrive base64-encoded because that survives the JSON
-/// the IPC bridge speaks at a third of the cost of an array of numbers.
+/// A percent-encoded header from a request, decoded.
+fn header_text(headers: &tauri::http::HeaderMap, name: &str) -> Result<String, String> {
+    let value = headers
+        .get(name)
+        .ok_or_else(|| format!("The request is missing {}", name))?;
+    percent_encoding::percent_decode(value.as_bytes())
+        .decode_utf8()
+        .map(|text| text.into_owned())
+        .map_err(|e| e.to_string())
+}
+
+/// The bytes of a request's body.
+///
+/// They arrive raw, as the body itself. Should the webview have fallen back
+/// to the message channel, which only speaks JSON, a byte array comes across
+/// as an array of numbers instead, and that is read too.
+fn body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, String> {
+    match body {
+        tauri::ipc::InvokeBody::Raw(bytes) => Ok(bytes.clone()),
+        tauri::ipc::InvokeBody::Json(value) => serde_json::from_value(value.clone())
+            .map_err(|e| format!("Could not read the dropped file: {}", e)),
+    }
+}
+
+/// Writes a dropped or pasted file into the directory in the
+/// `x-nuza-directory` header, creating it if it is not there yet, under the
+/// name in `x-nuza-name`. The file itself is the body of the request, as it
+/// is - no base64, and no JSON around it.
 /// Returns the full path actually written, which may have been renamed to
 /// avoid overwriting something.
 #[tauri::command]
 async fn write_media(
     app_handle: tauri::AppHandle,
-    directory: String,
-    name: String,
-    data: String,
+    request: tauri::ipc::Request<'_>,
 ) -> Result<String, String> {
-    off_thread(move || {
-        use base64::Engine;
+    let directory = header_text(request.headers(), "x-nuza-directory")?;
+    let name = header_text(request.headers(), "x-nuza-name")?;
+    let bytes = body_bytes(request.body())?;
 
+    off_thread(move || {
         let vault = app_handle.state::<Vault>();
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data.as_bytes())
-            .map_err(|e| format!("Could not read the dropped file: {}", e))?;
 
         let directory = preferred_directory(Path::new(&directory));
         let directory = within_vault_to_write(&vault, &directory)?;
@@ -2336,5 +2358,31 @@ mod tests {
             ["alias/", "real/", "broken.md", "linked.md", "note.md"]
         );
         assert_eq!(names(tree[0].children.as_ref().unwrap()), ["a.md"]);
+    }
+
+    #[test]
+    fn reads_a_percent_encoded_header() {
+        let mut headers = tauri::http::HeaderMap::new();
+        headers.insert(
+            "x-nuza-name",
+            "Screen%20Shot%20%E2%9C%93.png".parse().unwrap(),
+        );
+        assert_eq!(
+            header_text(&headers, "x-nuza-name").unwrap(),
+            "Screen Shot \u{2713}.png"
+        );
+        assert!(header_text(&headers, "x-nuza-directory").is_err());
+    }
+
+    #[test]
+    fn reads_a_body_sent_raw_or_as_json() {
+        let raw = tauri::ipc::InvokeBody::Raw(vec![0, 1, 255]);
+        assert_eq!(body_bytes(&raw).unwrap(), [0, 1, 255]);
+
+        let json = tauri::ipc::InvokeBody::Json(serde_json::json!([0, 1, 255]));
+        assert_eq!(body_bytes(&json).unwrap(), [0, 1, 255]);
+
+        let wrong = tauri::ipc::InvokeBody::Json(serde_json::json!({ "data": "AAH/" }));
+        assert!(body_bytes(&wrong).is_err());
     }
 }
