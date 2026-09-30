@@ -10,6 +10,7 @@ import FileSearchPalette from "./components/FileSearchPalette";
 import ChangedOnDisk from "./components/ChangedOnDisk";
 import RecoveredEdits from "./components/RecoveredEdits";
 import Notices from "./components/Notices";
+import ContextMenu from "./components/Sidebar/ContextMenu";
 import { useKeymaps, useKeymapListener } from "./hooks/useKeymaps";
 import { useCloseTabMenu } from "./hooks/useCloseTabMenu";
 import { useSaveOnExit } from "./hooks/useSaveOnExit";
@@ -22,6 +23,7 @@ import { useAppUpdater } from "./hooks/useAppUpdater";
 import { usePersistedState } from "./hooks/usePersistedState";
 import { useResizableSidebar } from "./hooks/useResizableSidebar";
 import { report } from "./lib/notices";
+import { addFrontmatter, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
 import { isMacPlatform } from "./lib/platform";
 import {
   DEFAULT_EDITOR_FONT,
@@ -175,6 +177,25 @@ function App() {
   // Stable identities, so the memoised chrome around the editor is not
   // re-rendered by a handler that was rebuilt for no reason.
   const returnFocusToEditor = useCallback(() => editorView?.focus(), [editorView]);
+
+  /**
+   * Where the editor's own menu is open, if it is. It only opens when there
+   * is something to put in it; otherwise a right-click falls through to the
+   * webview as it always has - and one inside a property's field always does,
+   * since that is a text box with its own copy and paste.
+   */
+  const [editorMenu, setEditorMenu] = useState<{ x: number; y: number } | null>(null);
+  const closeEditorMenu = useCallback(() => setEditorMenu(null), []);
+
+  const openEditorMenu = useCallback(
+    (event: React.MouseEvent) => {
+      if (!editorView || !canAddFrontmatter(editorView)) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      setEditorMenu({ x: event.clientX, y: event.clientY });
+    },
+    [editorView]
+  );
 
   /**
    * Opening the panel puts the keyboard in it, and closing it gives the
@@ -331,7 +352,15 @@ function App() {
           {/* CodeMirror mounts itself in here and owns the document from then
               on. Nothing about the text passes back through React, which is
               what keeps a keystroke from costing anything at the app level. */}
-          <div ref={editorContainer} className="flex-1 min-h-0" />
+          <div ref={editorContainer} onContextMenu={openEditorMenu} className="flex-1 min-h-0" />
+          {editorMenu && editorView && (
+            <ContextMenu
+              x={editorMenu.x}
+              y={editorMenu.y}
+              items={[{ label: "Add frontmatter", onClick: () => addFrontmatter(editorView) }]}
+              onClose={closeEditorMenu}
+            />
+          )}
         </div>
 
         {/*
