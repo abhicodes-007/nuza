@@ -136,3 +136,25 @@ export function backlinksTo(path: string, links: WikiLinkRef[], notes: string[],
     })
     .sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line);
 }
+
+/**
+ * What to write between the brackets to link `path` from a note in
+ * `fromDirectory`: the note's name where that finds it, and its path from the
+ * vault's root where another note of the same name would be found first.
+ */
+export function wikiTargetFor(path: string, notes: string[], root: string, fromDirectory: string) {
+  const name = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1).replace(/\.md$/i, "");
+  if (resolveWikiLink(name, notes, root, fromDirectory) === path) return name;
+
+  const relative = path.startsWith(root) ? path.slice(root.length) : path;
+  return relative.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\.md$/i, "");
+}
+
+/** The link to insert: `[[target]]`, or `[[target|label]]` with the selection as the label. */
+export function wikiLinkText(target: string, selected: string) {
+  const label = selected
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/[[\]|]/g, "")
+    .trim();
+  return label && label !== target ? `[[${target}|${label}]]` : `[[${target}]]`;
+}

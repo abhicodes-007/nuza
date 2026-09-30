@@ -24,7 +24,10 @@ import { useAppUpdater } from "./hooks/useAppUpdater";
 import { usePersistedState } from "./hooks/usePersistedState";
 import { useResizableSidebar } from "./hooks/useResizableSidebar";
 import { report } from "./lib/notices";
-import { addFrontmatter, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
+import { addFrontmatter, addProperty, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
+import { wikiLinkText, wikiTargetFor } from "./lib/markdown/wikiLinks";
+import { copyText } from "./lib/clipboard";
+import { directoryOf } from "./lib/markdown";
 import { noteLineNumbers } from "./lib/markdown/lineGutter";
 import { insertLink, toggleBold, toggleItalic } from "./lib/markdown/formatting";
 import { isMacPlatform } from "./lib/platform";
@@ -186,23 +189,110 @@ function App() {
   const returnFocusToEditor = useCallback(() => editorView?.focus(), [editorView]);
 
   /**
-   * Where the editor's own menu is open, if it is. It only opens when there
-   * is something to put in it; otherwise a right-click falls through to the
-   * webview as it always has - and one inside a property's field always does,
-   * since that is a text box with its own copy and paste.
+   * Where the editor's own menu is open, if it is. It stands in for the
+   * webview's, so it carries cut, copy and paste as that one did, alongside
+   * what is nuza's own. A right-click inside a property's field still gets
+   * the webview's - that is a text box, with a text box's menu.
    */
   const [editorMenu, setEditorMenu] = useState<{ x: number; y: number } | null>(null);
   const closeEditorMenu = useCallback(() => setEditorMenu(null), []);
+  /** Whether the note picker for a new wiki-link is open. */
+  const [isLinkPickerOpen, setIsLinkPickerOpen] = useState(false);
 
   const openEditorMenu = useCallback(
     (event: React.MouseEvent) => {
-      if (!editorView || !canAddFrontmatter(editorView)) return;
+      if (!editorView) return;
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       event.preventDefault();
       setEditorMenu({ x: event.clientX, y: event.clientY });
     },
     [editorView]
   );
+
+  const selectedText = useCallback(
+    () =>
+      editorView
+        ? editorView.state.selection.ranges
+            .map((range) => editorView.state.sliceDoc(range.from, range.to))
+            .join("\n")
+        : "",
+    [editorView]
+  );
+
+  const copySelection = useCallback(
+    async (cut: boolean) => {
+      if (!editorView) return;
+      try {
+        await copyText(selectedText());
+        if (cut) editorView.dispatch(editorView.state.replaceSelection(""), { userEvent: "delete.cut" });
+      } catch (error) {
+        report(cut ? "Couldn't cut that" : "Couldn't copy that", error);
+      }
+      editorView.focus();
+    },
+    [editorView, selectedText]
+  );
+
+  // Pasted through the editor's own paste handling, as a keyboard paste is,
+  // so lists continue and nothing arrives as anything but text.
+  const pasteClipboard = useCallback(async () => {
+    if (!editorView) return;
+    editorView.focus();
+    try {
+      const text = await navigator.clipboard.readText();
+      editorView.dispatch(editorView.state.replaceSelection(text), { userEvent: "input.paste" });
+    } catch (error) {
+      report(`Couldn't paste from here - ${isMacPlatform() ? "⌘" : "Ctrl+"}V still works`, error);
+    }
+  }, [editorView]);
+
+  /**
+   * Writes a link to the chosen note where the caret is - by name, or by path
+   * where another note of that name would be found first - with any selected
+   * text as the link's label.
+   */
+  const linkToNote = useCallback(
+    (path: string) => {
+      if (!editorView || !rootPath) return;
+      const notes: string[] = [];
+      const collect = (entries: typeof folderData) => {
+        for (const entry of entries) {
+          if (entry.children) collect(entry.children);
+          else if (/\.md$/i.test(entry.name)) notes.push(entry.path);
+        }
+      };
+      collect(folderData);
+
+      const target = wikiTargetFor(path, notes, rootPath, directoryOf(currentFile) || rootPath);
+      const { from, to } = editorView.state.selection.main;
+      const insert = wikiLinkText(target, editorView.state.sliceDoc(from, to));
+      editorView.dispatch({
+        changes: { from, to, insert },
+        selection: { anchor: from + insert.length },
+        userEvent: "input",
+      });
+      editorView.focus();
+    },
+    [editorView, rootPath, folderData, currentFile]
+  );
+
+  const editorMenuItems = useCallback(() => {
+    if (!editorView) return [];
+    const hasSelection = editorView.state.selection.ranges.some((range) => !range.empty);
+    return [
+      ...(hasSelection
+        ? [
+            { label: "Cut", onClick: () => void copySelection(true) },
+            { label: "Copy", onClick: () => void copySelection(false) },
+          ]
+        : []),
+      { label: "Paste", onClick: () => void pasteClipboard() },
+      ...(rootPath ? [{ label: "Link to Note…", onClick: () => setIsLinkPickerOpen(true) }] : []),
+      canAddFrontmatter(editorView)
+        ? { label: "Add Frontmatter", onClick: () => addFrontmatter(editorView) }
+        : { label: "Add Property", onClick: () => addProperty(editorView) },
+    ];
+  }, [editorView, rootPath, copySelection, pasteClipboard]);
 
   /**
    * Opening the panel puts the keyboard in it, and closing it gives the
@@ -400,7 +490,7 @@ function App() {
             <ContextMenu
               x={editorMenu.x}
               y={editorMenu.y}
-              items={[{ label: "Add frontmatter", onClick: () => addFrontmatter(editorView) }]}
+              items={editorMenuItems()}
               onClose={closeEditorMenu}
             />
           )}
@@ -465,6 +555,20 @@ function App() {
         openPaths={openPaths}
         currentFile={currentFile}
         onSelect={selectFile}
+      />
+
+      <FileSearchPalette
+        isOpen={isLinkPickerOpen}
+        onClose={() => {
+          setIsLinkPickerOpen(false);
+          editorView?.focus();
+        }}
+        data={folderData}
+        openPaths={openPaths}
+        currentFile={currentFile}
+        onSelect={linkToNote}
+        placeholder="Link to a note"
+        notesOnly
       />
 
       <div className="contents print:hidden">

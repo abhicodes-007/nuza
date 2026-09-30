@@ -15,6 +15,10 @@ interface FileSearchPaletteProps {
   openPaths: string[];
   currentFile: string;
   onSelect: (path: string) => void;
+  /** What the search box asks for. */
+  placeholder?: string;
+  /** Only markdown notes - for picking a note to link to. */
+  notesOnly?: boolean;
 }
 
 /**
@@ -29,6 +33,8 @@ function FileSearchPalette({
   openPaths,
   currentFile,
   onSelect,
+  placeholder = "Search files",
+  notesOnly = false,
 }: FileSearchPaletteProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -47,8 +53,9 @@ function FileSearchPalette({
   const matches = useMemo(() => {
     if (!isMounted) return [];
     // With nothing typed, the open tabs are the most likely destinations.
-    return query.trim() ? searchFiles(data, query) : matchesForPaths(data, openPaths);
-  }, [isMounted, data, openPaths, query]);
+    const found = query.trim() ? searchFiles(data, query) : matchesForPaths(data, openPaths);
+    return notesOnly ? found.filter((match) => /\.md$/i.test(match.entry.name)) : found;
+  }, [isMounted, data, openPaths, query, notesOnly]);
 
   useEffect(() => {
     listRef.current?.children[activeIndex]?.scrollIntoView({ block: "nearest" });
@@ -81,7 +88,8 @@ function FileSearchPalette({
 
   if (!isMounted) return null;
 
-  const hint = query.trim() ? "No files match." : "Type to find a file.";
+  const noun = notesOnly ? "note" : "file";
+  const hint = query.trim() ? `No ${noun}s match.` : `Type to find a ${noun}.`;
 
   return (
     <div
@@ -107,7 +115,7 @@ function FileSearchPalette({
           <input
             autoFocus
             value={query}
-            placeholder="Search files"
+            placeholder={placeholder}
             aria-label="Quick open"
             onChange={(e) => {
               setQuery(e.target.value);
