@@ -43,7 +43,10 @@ function StatusBar({ mode, currentFile, subscribeToStats }: StatusBarProps) {
   const { words, line, column } = useDocumentStats(subscribeToStats);
 
   return (
-    <div className="bg-[var(--nuza-bg)] flex items-center justify-between font-bold font-mono shrink-0 h-7 relative z-10">
+    <div
+      className="flex items-center justify-between font-bold font-mono shrink-0 h-7 relative z-10"
+      style={{ background: "var(--nuza-status-bg)" }}
+    >
       <div className="flex items-center h-full">
         <span className={`text-xs uppercase px-4 h-full flex items-center w-fit ${modeStyle ?? ""}`}>
           {modeStyle ? `--${mode}--` : ""}

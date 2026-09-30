@@ -49,6 +49,8 @@ const FIXED: Record<Theme, Record<string, string>> = {
     "--nuza-syntax-function": "#9696FF",
     "--nuza-syntax-type": "#7BD7F5",
     "--nuza-editor-tint": "rgba(0, 0, 0, 0.2)",
+    // The Vim bar: solid, as it has always been on dark.
+    "--nuza-status-bg": "var(--nuza-bg)",
   },
   light: {
     "--nuza-code": "#5151C7",
@@ -58,6 +60,11 @@ const FIXED: Record<Theme, Record<string, string>> = {
     "--nuza-syntax-function": "#4A4AD0",
     "--nuza-syntax-type": "#0E7490",
     "--nuza-editor-tint": "rgba(0, 0, 0, 0.03)",
+    // On light a solid bar is the palest thing in a window whose editor is
+    // the tinted, see-through backdrop - so it is painted as that surface is:
+    // the window's background, with the editor's tint laid over it.
+    "--nuza-status-bg":
+      "linear-gradient(var(--nuza-editor-tint), var(--nuza-editor-tint)), var(--nuza-bg-alpha)",
   },
 };
 
