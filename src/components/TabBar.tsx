@@ -10,7 +10,16 @@ interface TabBarProps {
   dirtyPaths: ReadonlySet<string>;
   onSelect: (path: string) => void;
   onClose: (path: string) => void;
+  /** Moves a tab so it sits before the tab at `before`; the strip's length is the end. */
+  onReorder: (path: string, before: number) => void;
 }
+
+/**
+ * The type a dragged tab is carried as. Its own, rather than text, so a tab
+ * let go of over the note or the sidebar is nothing to them - neither writes
+ * its path into the note nor tries to move a file.
+ */
+const TAB_TYPE = "application/x-nuza-tab";
 
 function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path;
@@ -30,9 +39,17 @@ function prefersReducedMotion() {
  * The strip is sized to its content rather than filling the bar, so whatever
  * space the tabs don't need stays draggable for moving the window.
  */
-function TabBar({ paths, activePath, dirtyPaths, onSelect, onClose }: TabBarProps) {
+function TabBar({ paths, activePath, dirtyPaths, onSelect, onClose, onReorder }: TabBarProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [fade, setFade] = useState({ start: false, end: false });
+  const [dragged, setDragged] = useState<string | null>(null);
+  /** Where a dragged tab would land: before the tab at this index. */
+  const [dropBefore, setDropBefore] = useState<number | null>(null);
+
+  function endDrag() {
+    setDragged(null);
+    setDropBefore(null);
+  }
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -89,9 +106,13 @@ function TabBar({ paths, activePath, dirtyPaths, onSelect, onClose }: TabBarProp
       className="no-scrollbar flex min-w-0 shrink items-center gap-0.5 overflow-x-auto"
       style={{ maskImage: mask, WebkitMaskImage: mask }}
     >
-      {paths.map((path) => {
+      {paths.map((path, index) => {
         const isActive = path === activePath;
         const isDirty = dirtyPaths.has(path);
+        // The marker sits on the left edge of the tab it would land before,
+        // or the right edge of the last tab for the end of the strip.
+        const markerBefore = dragged !== null && dropBefore === index;
+        const markerAfter = dragged !== null && dropBefore === paths.length && index === paths.length - 1;
 
         return (
           <div
@@ -101,6 +122,28 @@ function TabBar({ paths, activePath, dirtyPaths, onSelect, onClose }: TabBarProp
             tabIndex={isActive ? 0 : -1}
             data-active={isActive}
             title={path}
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.setData(TAB_TYPE, path);
+              event.dataTransfer.effectAllowed = "move";
+              setDragged(path);
+            }}
+            onDragEnd={endDrag}
+            onDragOver={(event) => {
+              if (!event.dataTransfer.types.includes(TAB_TYPE)) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              // Which half of the tab the pointer is over decides the side.
+              const rect = event.currentTarget.getBoundingClientRect();
+              setDropBefore(event.clientX < rect.left + rect.width / 2 ? index : index + 1);
+            }}
+            onDrop={(event) => {
+              const moving = event.dataTransfer.getData(TAB_TYPE);
+              if (!moving || dropBefore === null) return;
+              event.preventDefault();
+              onReorder(moving, dropBefore);
+              endDrag();
+            }}
             onClick={() => onSelect(path)}
             onAuxClick={(event) => {
               // Middle-click closes, as it does in a browser.
@@ -114,8 +157,15 @@ function TabBar({ paths, activePath, dirtyPaths, onSelect, onClose }: TabBarProp
             }}
             className={`animate-fade-in group relative flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pl-2.5 pr-1 text-xs transition-colors outline-none focus-visible:ring-1 focus-visible:ring-[var(--nuza-accent)] ${
               isActive ? "bg-zinc-800 text-white" : "text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300"
-            }`}
+            } ${dragged === path ? "opacity-40" : ""}`}
           >
+            {(markerBefore || markerAfter) && (
+              <span
+                className={`pointer-events-none absolute inset-y-1 w-[2px] rounded-full bg-[var(--nuza-accent)] ${
+                  markerBefore ? "-left-[2px]" : "-right-[2px]"
+                }`}
+              />
+            )}
             {/* Inset from the corners and positioned rather than set as a border,
                 so the accent stays a straight line instead of bending around the
                 pill's radius. */}
