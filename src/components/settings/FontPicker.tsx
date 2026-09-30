@@ -21,6 +21,34 @@ function labelFor(font: string) {
   return font || DEFAULT_LABEL;
 }
 
+/** Tells each row when it first comes near the visible part of the list. */
+type Watch = (element: Element, onSeen: () => void) => () => void;
+
+/**
+ * A font's name, set in that font once the row has been scrolled near.
+ *
+ * Every row naming its own family meant asking for hundreds of families in
+ * the frame the list opened - each one resolved, loaded and laid out, most of
+ * them for rows nobody would scroll to. Until a row is near the viewport its
+ * name is in the interface's font; once it has been, it keeps its own, so
+ * scrolling back does not flicker.
+ */
+function FontName({ font, watch }: { font: string; watch: Watch | null }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [seen, setSeen] = useState(false);
+
+  useEffect(() => {
+    if (seen || !watch || !ref.current) return;
+    return watch(ref.current, () => setSeen(true));
+  }, [seen, watch]);
+
+  return (
+    <span ref={ref} className="truncate" style={seen ? { fontFamily: editorFontFamily(font) } : undefined}>
+      {labelFor(font)}
+    </span>
+  );
+}
+
 /**
  * The font list runs to hundreds of entries on most machines, which a native
  * `<select>` turns into an unsearchable column of identical-looking names in
@@ -37,6 +65,44 @@ export default function FontPicker({ fonts, value, onChange }: FontPickerProps) 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const [watch, setWatch] = useState<Watch | null>(null);
+  // Whether the list is on screen yet. Not `placement` itself, which is a new
+  // object on every scroll - the list's own included.
+  const placed = placement !== null;
+
+  // One observer for the whole list, rooted in it, a few rows ahead of the
+  // scroll so a font is usually in place by the time its row arrives.
+  useEffect(() => {
+    const root = listRef.current;
+    if (!isOpen || !placed || !root) return;
+
+    const waiting = new Map<Element, () => void>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          waiting.get(entry.target)?.();
+          waiting.delete(entry.target);
+          observer.unobserve(entry.target);
+        }
+      },
+      { root, rootMargin: "120px 0px" }
+    );
+
+    setWatch(() => (element: Element, onSeen: () => void) => {
+      waiting.set(element, onSeen);
+      observer.observe(element);
+      return () => {
+        waiting.delete(element);
+        observer.unobserve(element);
+      };
+    });
+
+    return () => {
+      observer.disconnect();
+      setWatch(null);
+    };
+  }, [isOpen, placed]);
 
   const options = useMemo(() => {
     // A font saved before it was uninstalled stays selectable, so opening the
@@ -199,9 +265,7 @@ export default function FontPicker({ fonts, value, onChange }: FontPickerProps) 
                     index === highlighted ? "bg-zinc-800 text-white" : "text-gray-300"
                   )}
                 >
-                  <span className="truncate" style={{ fontFamily: editorFontFamily(font) }}>
-                    {labelFor(font)}
-                  </span>
+                  <FontName font={font} watch={watch} />
                   {font === value && <Check size={12} className="shrink-0 text-[var(--nuza-accent)]" />}
                 </button>
               ))}
