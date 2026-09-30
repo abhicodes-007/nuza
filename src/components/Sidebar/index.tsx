@@ -38,6 +38,7 @@ interface SidebarProps {
   onCreateFile: (parentPath: string, name: string) => Promise<void> | void;
   onCreateFolder: (parentPath: string, name: string) => Promise<void> | void;
   onRename: (path: string, newName: string) => Promise<void> | void;
+  onDuplicate: (path: string) => Promise<void> | void;
   onDelete: (path: string) => Promise<void> | void;
   onMove: (path: string, targetDir: string) => Promise<void> | void;
   onAttachFiles: (directory: string, files: File[]) => Promise<void> | void;
@@ -65,6 +66,7 @@ function Sidebar({
   onCreateFile,
   onCreateFolder,
   onRename,
+  onDuplicate,
   onDelete,
   onMove,
   onAttachFiles,
@@ -374,6 +376,12 @@ function Sidebar({
     copyText(path).catch((error) => report("Couldn't copy the path", error));
   }
 
+  function duplicateEntry(path: string) {
+    Promise.resolve(onDuplicate(path)).catch((error) =>
+      report(`Couldn't duplicate "${fileNameOf(path)}"`, error)
+    );
+  }
+
   const contextItems: ContextMenuItem[] = useMemo(() => {
     if (!contextMenu) return [];
     const { entry } = contextMenu;
@@ -392,8 +400,9 @@ function Sidebar({
         { label: "New Folder", onClick: () => beginCreate("folder", entry.path) }
       );
     }
+    items.push({ label: "Rename", onClick: () => setRenamingPath(entry.path) });
+    if (!entry.isDirectory) items.push({ label: "Duplicate", onClick: () => duplicateEntry(entry.path) });
     items.push(
-      { label: "Rename", onClick: () => setRenamingPath(entry.path) },
       { label: revealLabel(), onClick: () => revealEntry(entry.path) },
       { label: "Copy Path", onClick: () => copyPath(entry.path) },
       { label: "Copy Relative Path", onClick: () => copyPath(relativePath(rootPath ?? "", entry.path)) },
