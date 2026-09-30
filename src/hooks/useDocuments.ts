@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Compartment, EditorState, Extension } from "@codemirror/state";
+import { Compartment, EditorState, Extension, Text } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "@uiw/codemirror-extensions-basic-setup";
 import { directoryOf, liveMarkdown, noteDirectory, vaultDirectory } from "@/lib/markdown";
 import { documentsToEvict } from "@/lib/documentCache";
-import { countDocument, DocumentStats, EMPTY_DOCUMENT_STATS } from "@/lib/documentStats";
+import { countDocument, DocumentStats, EMPTY_DOCUMENT_STATS, recount, WordTally } from "@/lib/documentStats";
 
 /**
  * Nothing in the margins and nothing highlighted: the rendered markdown is the
@@ -23,10 +23,10 @@ const writingSurface: Extension = [
 ];
 
 /**
- * How long typing has to stop before the words are counted again. Counting
- * walks the whole document, so it waits for a pause rather than joining in on
- * every keystroke; the character count and the caret position come for free
- * and are published immediately.
+ * How long a note that has just been opened waits for its first word count.
+ * That count walks the whole note, so it is left for a moment rather than
+ * joining in with the swap; every edit after it is counted on the keystroke,
+ * a few lines at a time.
  */
 const COUNT_DELAY = 250;
 
@@ -135,6 +135,8 @@ export function useDocuments({
   const listeners = useRef(new Set<(stats: DocumentStats) => void>());
   const latestStats = useRef<DocumentStats>(EMPTY_DOCUMENT_STATS);
   const countTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The word count, and the version of the document it is the count of. */
+  const tally = useRef<(WordTally & { doc: Text }) | null>(null);
 
   const publish = useCallback((stats: DocumentStats) => {
     latestStats.current = stats;
@@ -146,7 +148,10 @@ export function useDocuments({
     countTimer.current = setTimeout(() => {
       countTimer.current = null;
       const doc = editor.current?.state.doc;
-      if (doc) publish({ ...latestStats.current, ...countDocument(doc) });
+      if (!doc) return;
+      const { words, paragraphs } = countDocument(doc);
+      tally.current = { doc, words, paragraphs };
+      publish({ ...latestStats.current, words, paragraphs });
     }, COUNT_DELAY);
   }, [publish]);
 
@@ -154,13 +159,17 @@ export function useDocuments({
     (state: EditorState) => {
       const head = state.selection.main.head;
       const line = state.doc.lineAt(head);
+      const counted = tally.current?.doc === state.doc ? tally.current : null;
       publish({
         ...latestStats.current,
+        ...(counted && { words: counted.words, paragraphs: counted.paragraphs }),
         characters: state.doc.length,
         line: line.number,
         column: head - line.from + 1,
       });
-      scheduleCount();
+      // A document with no count yet - one just swapped in - is counted in
+      // full once things settle.
+      if (!counted) scheduleCount();
     },
     [publish, scheduleCount]
   );
@@ -183,6 +192,13 @@ export function useDocuments({
   const trackEdits = useRef<Extension>(null);
   if (!trackEdits.current) {
     trackEdits.current = EditorView.updateListener.of((update) => {
+      // Carry the word count across the edit rather than counting again: only
+      // the lines it touched are looked at.
+      const counted = tally.current;
+      if (update.docChanged && counted?.doc === update.startState.doc) {
+        const next = recount(counted.doc, update.state.doc, update.changes, counted);
+        tally.current = { doc: update.state.doc, ...next };
+      }
       if (update.docChanged && !swapping.current) {
         const path = currentPath.current;
         setDirtyPaths((paths) => (paths.has(path) ? paths : new Set(paths).add(path)));
