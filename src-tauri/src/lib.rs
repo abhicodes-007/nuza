@@ -289,6 +289,80 @@ fn search_vault(root: &Path, query: &str) -> Result<Vec<ContentHit>, String> {
     Ok(hits)
 }
 
+/// A `[[wiki-link]]` written in a note: which note, which line, and what is
+/// between the brackets - resolving that to a note is the frontend's, which
+/// knows the rules and already holds the tree they are applied to.
+#[derive(serde::Serialize, Debug, PartialEq)]
+struct WikiLinkRef {
+    from: String,
+    /// What is between `[[` and `]]`, as written.
+    target: String,
+    /// 1-based.
+    line: usize,
+    /// The line, cut down when it is long.
+    preview: String,
+}
+
+/// Every `[[wiki-link]]` in `text`, on the lines outside fenced code. A link
+/// cannot run across a line or hold a bracket, the same rules the editor's
+/// parser follows.
+fn wiki_links_in(from: &str, text: &str) -> Vec<WikiLinkRef> {
+    let mut links = Vec::new();
+    let mut fenced = false;
+
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+
+        let mut rest = line;
+        while let Some(open) = rest.find("[[") {
+            let after = &rest[open + 2..];
+            let Some(close) = after.find("]]") else { break };
+            let inner = &after[..close];
+            // Not a link - empty, or holding a bracket: look again just past
+            // its `[[`, since a real one can start inside it, as `[[x] [[y]]`.
+            if inner.is_empty() || inner.contains('[') || inner.contains(']') {
+                rest = after;
+                continue;
+            }
+            let preview: String = line.trim().chars().take(PREVIEW_LENGTH).collect();
+            links.push(WikiLinkRef {
+                from: from.to_string(),
+                target: inner.to_string(),
+                line: index + 1,
+                preview,
+            });
+            rest = &after[close + 2..];
+        }
+    }
+
+    links
+}
+
+/// Every wiki-link in the notes under `root`, the ones the sidebar lists.
+fn vault_wiki_links(root: &Path) -> Result<Vec<WikiLinkRef>, String> {
+    let mut notes = Vec::new();
+    markdown_notes(&read_dir_recursive(root)?, &mut notes);
+
+    let mut links = Vec::new();
+    for note in notes {
+        if fs::metadata(&note).map_or(true, |meta| meta.len() > SEARCHABLE_BYTES) {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&note) else {
+            continue;
+        };
+        links.extend(wiki_links_in(&note.to_string_lossy(), &text));
+    }
+    Ok(links)
+}
+
 /// What the app is allowed to touch: the folder that is open, and whatever the
 /// user has pointed at directly through a save dialog.
 ///
@@ -1308,6 +1382,19 @@ fn duplicate_file(source: &Path) -> Result<PathBuf, String> {
     Ok(copy_path)
 }
 
+/// Every wiki-link written in the open vault, for the backlinks panel.
+#[tauri::command]
+async fn list_wiki_links(app_handle: tauri::AppHandle) -> Result<Vec<WikiLinkRef>, String> {
+    off_thread(move || {
+        let root = locked(&app_handle.state::<Vault>().root).clone();
+        match root {
+            Some(root) => vault_wiki_links(&root),
+            None => Ok(Vec::new()),
+        }
+    })
+    .await
+}
+
 /// The lines of the open vault's notes that contain `query`, ignoring case.
 #[tauri::command]
 async fn search_contents(
@@ -1848,6 +1935,7 @@ pub fn run() {
             open_folder,
             read_file,
             search_contents,
+            list_wiki_links,
             duplicate_entry,
             write_file,
             write_media,
@@ -2761,5 +2849,27 @@ mod tests {
         sorted.dedup();
         assert_eq!(families, sorted);
         assert!(families.iter().all(|name| !name.starts_with('.')));
+    }
+
+    #[test]
+    fn finds_wiki_links_outside_code() {
+        let text = "see [[Ideas]] and [[a/b|label]]\n```\n[[not this]]\n```\n[[]] [[x] [[last]]";
+        let links = wiki_links_in("n.md", text);
+        let found: Vec<(&str, usize)> = links.iter().map(|l| (l.target.as_str(), l.line)).collect();
+        assert_eq!(found, [("Ideas", 1), ("a/b|label", 1), ("last", 5)]);
+        assert_eq!(links[0].preview, "see [[Ideas]] and [[a/b|label]]");
+    }
+
+    #[test]
+    fn lists_the_wiki_links_in_a_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "to [[b]]").unwrap();
+        fs::create_dir(dir.path().join(".hidden")).unwrap();
+        fs::write(dir.path().join(".hidden").join("c.md"), "to [[b]]").unwrap();
+        fs::write(dir.path().join("d.txt"), "to [[b]]").unwrap();
+
+        let links = vault_wiki_links(dir.path()).unwrap();
+        assert_eq!(links.len(), 1);
+        assert!(links[0].from.ends_with("a.md"));
     }
 }
