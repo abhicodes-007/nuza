@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StateCommand } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { invoke } from "@tauri-apps/api/core";
 import EditorHeader from "./components/EditorHeader";
@@ -25,6 +26,7 @@ import { useResizableSidebar } from "./hooks/useResizableSidebar";
 import { report } from "./lib/notices";
 import { addFrontmatter, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
 import { noteLineNumbers } from "./lib/markdown/lineGutter";
+import { insertLink, toggleBold, toggleItalic } from "./lib/markdown/formatting";
 import { isMacPlatform } from "./lib/platform";
 import {
   DEFAULT_EDITOR_FONT,
@@ -222,6 +224,18 @@ function App() {
   // keymap listener.
   const closeCurrentTab = useCallback(() => closeFile(currentFile), [closeFile, currentFile]);
 
+  /**
+   * Runs a formatting command on the note, when the note is what has the
+   * keyboard. The chords fire everywhere else too - they carry a modifier -
+   * and bolding the note from the sidebar's rename box would be a surprise.
+   */
+  const format = useCallback(
+    (command: StateCommand) => {
+      if (editorView?.hasFocus) command(editorView);
+    },
+    [editorView]
+  );
+
   const keymapHandlers = useMemo(
     () => ({
       "toggle-sidebar": toggleSidebar,
@@ -246,6 +260,9 @@ function App() {
       "recent-tab": switchToRecent,
       "close-tab": closeCurrentTab,
       "reopen-closed-tab": () => void reopenClosedTab(),
+      "toggle-bold": () => format(toggleBold),
+      "toggle-italic": () => format(toggleItalic),
+      "insert-link": () => format(insertLink),
     }),
     [
       save,
@@ -258,6 +275,7 @@ function App() {
       closeCurrentTab,
       reopenClosedTab,
       toggleSidebar,
+      format,
     ]
   );
 
