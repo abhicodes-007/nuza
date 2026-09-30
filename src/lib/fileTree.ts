@@ -130,3 +130,60 @@ export function addFile(tree: FileEntry[], rootPath: string, path: string): File
   const withFolder = ensureDirectory(tree, rootPath, parentOf(path));
   return addEntry(withFolder, rootPath, { name: nameOf(path), path, isDirectory: false });
 }
+
+/** How the sidebar orders a folder's contents. Folders always come first. */
+export type SortOrder = "name" | "modified" | "created";
+
+export const SORT_ORDERS: { id: SortOrder; label: string }[] = [
+  { id: "name", label: "Name" },
+  { id: "modified", label: "Date Modified" },
+  { id: "created", label: "Date Created" },
+];
+
+/**
+ * When an entry was changed or made, for sorting. One with no time is newer
+ * than anything - it is a file the app has only just created - and a
+ * creation time the filesystem does not keep falls back to the last write.
+ */
+function timeOf(entry: FileEntry, order: "modified" | "created") {
+  const time = order === "created" ? (entry.created ?? entry.modified) : entry.modified;
+  return time ?? Number.POSITIVE_INFINITY;
+}
+
+function byName(a: FileEntry, b: FileEntry) {
+  const left = a.name.toLowerCase();
+  const right = b.name.toLowerCase();
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * The tree as the sidebar shows it: folders first, then by name, or newest
+ * first by date. The tree itself stays in name order - the order every edit to
+ * it keeps - so this is only ever a view of it, and for name order it is the
+ * tree itself.
+ */
+export function sortTree(tree: FileEntry[], order: SortOrder): FileEntry[] {
+  if (order === "name") return tree;
+
+  const sort = (entries: FileEntry[]): FileEntry[] =>
+    entries
+      .map((entry) => (entry.children ? { ...entry, children: sort(entry.children) } : entry))
+      .sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        const newer = timeOf(b, order) - timeOf(a, order);
+        return (Number.isNaN(newer) ? 0 : newer) || byName(a, b);
+      });
+
+  return sort(tree);
+}
+
+/** Marks the entry at `path` as written just now, after the app saved it. */
+export function touchEntry(tree: FileEntry[], rootPath: string, path: string, at = Date.now()): FileEntry[] {
+  // The same tree back for a note the sidebar does not list - the scratch
+  // note above all, saved on the same timer - so nothing re-renders for it.
+  if (!findEntry(tree, path)) return tree;
+  const parent = parentOf(path);
+  const touch = (children: FileEntry[]) =>
+    children.map((child) => (child.path === path ? { ...child, modified: at } : child));
+  return parent === rootPath ? touch(tree) : updateDirectory(tree, parent, touch);
+}

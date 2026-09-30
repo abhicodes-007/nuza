@@ -7,6 +7,7 @@ import { FileEntry } from "@/lib/types";
 import {
   addEntry,
   addFile,
+  touchEntry,
   findEntry,
   joinPath,
   moveEntry as moveTreeEntry,
@@ -350,6 +351,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       }
 
       if (documentRevision(path) === before) markSaved(path);
+      // Keeps "Date Modified" order honest about the notes written from here.
+      setFolderData((tree) => touchEntry(tree, rootPathRef.current ?? "", path));
       // What is on disk is this note now, whatever it was a moment ago.
       clearConflict(path);
     },

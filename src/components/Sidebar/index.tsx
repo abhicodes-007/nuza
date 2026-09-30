@@ -1,5 +1,5 @@
 import { memo, Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { ChevronsDownUp, FilePlus, FolderPlus, Search, X } from "lucide-react";
+import { ArrowUpDown, ChevronsDownUp, FilePlus, FolderPlus, Search, X } from "lucide-react";
 import { cn } from "cn";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { draggedPath, endDrag } from "@/lib/dragSource";
@@ -12,6 +12,8 @@ import { folderOf, parentRow, rowAfter, visibleRows } from "@/lib/treeNavigation
 import { report } from "@/lib/notices";
 import { revealLabel } from "@/lib/platform";
 import { FileEntry } from "@/lib/types";
+import { SORT_ORDERS, SortOrder, sortTree } from "@/lib/fileTree";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { TreeContext, TreeActions, ContextMenuState, PendingCreate } from "./TreeContext";
 import FileTreeNode, { NewEntryRow } from "./FileTreeNode";
 import ContextMenu, { ContextMenuItem } from "./ContextMenu";
@@ -84,6 +86,12 @@ function Sidebar({
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [pendingCreate, setPendingCreate] = useState<PendingCreate>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
+  const [sortOrder, setSortOrder] = usePersistedState<SortOrder>("sidebarSort", "name");
+  const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null);
+  // Storage can hold anything; an order that is not one falls back to name.
+  const order = SORT_ORDERS.some((option) => option.id === sortOrder) ? sortOrder : "name";
+  /** The tree in the order it is shown in. For name order it is the tree itself. */
+  const shownData = useMemo(() => sortTree(data, order), [data, order]);
   const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [query, setQuery] = useState("");
@@ -493,6 +501,20 @@ function Sidebar({
               <FolderPlus className="h-3.5 w-3.5" />
             </button>
             <button
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setSortMenu({ x: rect.left, y: rect.bottom + 4 });
+              }}
+              title="Sort Order"
+              aria-label="Sort order"
+              className={cn(
+                "cursor-pointer rounded p-1 transition-colors hover:bg-zinc-800 hover:text-white",
+                order === "name" ? "text-zinc-500" : "text-[var(--nuza-accent)]"
+              )}
+            >
+              <ArrowUpDown className="h-3.5 w-3.5" />
+            </button>
+            <button
               onClick={collapseAll}
               title="Collapse Folders"
               className="cursor-pointer rounded p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-white"
@@ -606,7 +628,7 @@ function Sidebar({
               {pendingCreate?.parentPath === rootPath && (
                 <NewEntryRow type={pendingCreate.type} onSubmit={submitCreate} onCancel={cancelCreate} />
               )}
-              {data.map((entry) => (
+              {shownData.map((entry) => (
                 <FileTreeNode key={entry.path} entry={entry} />
               ))}
             </ul>
@@ -629,6 +651,19 @@ function Sidebar({
           y={contextMenu.y}
           items={contextItems}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {sortMenu && (
+        <ContextMenu
+          x={sortMenu.x}
+          y={sortMenu.y}
+          items={SORT_ORDERS.map((option) => ({
+            label: option.label,
+            checked: option.id === order,
+            onClick: () => setSortOrder(option.id),
+          }))}
+          onClose={() => setSortMenu(null)}
         />
       )}
 

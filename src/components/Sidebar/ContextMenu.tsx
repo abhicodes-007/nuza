@@ -1,9 +1,12 @@
 import { useEffect, useRef } from "react";
+import { Check } from "lucide-react";
 
 export interface ContextMenuItem {
   label: string;
   onClick: () => void;
   danger?: boolean;
+  /** For a choice among several: the one in force carries a tick. */
+  checked?: boolean;
 }
 
 export default function ContextMenu({
@@ -60,7 +63,14 @@ export default function ContextMenu({
             item.danger ? "text-red-400 hover:text-red-300" : "text-zinc-200"
           }`}
         >
-          {item.label}
+          {item.checked === undefined ? (
+            item.label
+          ) : (
+            <span className="flex items-center gap-2">
+              <Check className={`h-3 w-3 shrink-0 ${item.checked ? "" : "invisible"}`} />
+              {item.label}
+            </span>
+          )}
         </button>
       ))}
     </div>
