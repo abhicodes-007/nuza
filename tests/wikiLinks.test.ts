@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { GFM, parser } from "@lezer/markdown";
-import { WikiLink, backlinksTo, readWikiLink, resolveWikiLink } from "../src/lib/markdown/wikiLinks";
+import {
+  WikiLink,
+  backlinksTo,
+  readWikiLink,
+  resolveWikiLink,
+  wikiLinkText,
+  wikiTargetFor,
+} from "../src/lib/markdown/wikiLinks";
 
 const markdown = parser.configure([GFM, WikiLink]);
 
@@ -104,5 +111,34 @@ describe("backlinksTo", () => {
 
   test("leaves out a note's links to itself", () => {
     expect(backlinksTo("/vault/a.md", [link("/vault/a.md", "a")], notes, root)).toEqual([]);
+  });
+});
+
+describe("wikiTargetFor", () => {
+  const root = "/vault";
+  const notes = ["/vault/Ideas.md", "/vault/work/ideas.md", "/vault/todo.md"];
+
+  test("writes the name where the name finds the note", () => {
+    expect(wikiTargetFor("/vault/todo.md", notes, root, "/vault")).toBe("todo");
+    expect(wikiTargetFor("/vault/work/ideas.md", notes, root, "/vault/work")).toBe("ideas");
+  });
+
+  test("writes the path where another note of that name would win", () => {
+    expect(wikiTargetFor("/vault/work/ideas.md", notes, root, "/vault")).toBe("work/ideas");
+  });
+});
+
+describe("wikiLinkText", () => {
+  test("uses the selection as the label", () => {
+    expect(wikiLinkText("todo", "my list")).toBe("[[todo|my list]]");
+  });
+
+  test("leaves the label out when there is none, or it is the target", () => {
+    expect(wikiLinkText("todo", "")).toBe("[[todo]]");
+    expect(wikiLinkText("todo", "todo")).toBe("[[todo]]");
+  });
+
+  test("keeps a label to one line and free of brackets and bars", () => {
+    expect(wikiLinkText("todo", "a [b]\n c|d")).toBe("[[todo|a b cd]]");
   });
 });
