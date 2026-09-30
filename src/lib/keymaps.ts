@@ -13,7 +13,10 @@ export type KeymapAction =
   | "previous-tab"
   | "recent-tab"
   | "close-tab"
-  | "reopen-closed-tab";
+  | "reopen-closed-tab"
+  | "toggle-bold"
+  | "toggle-italic"
+  | "insert-link";
 
 export interface KeymapDefinition {
   id: KeymapAction;
@@ -28,7 +31,9 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
     id: "toggle-sidebar",
     label: "Toggle Sidebar",
     description: "Show or hide the file explorer",
-    defaultBinding: "mod+b",
+    // Not mod+b: that is bold in every editor anyone writes in. mod+\ is
+    // the sidebar toggle in Notion, among others.
+    defaultBinding: "mod+\\",
   },
   {
     id: "save-file",
@@ -116,6 +121,24 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
     label: "Reopen Closed Tab",
     description: "Bring back the tab closed most recently",
     defaultBinding: "mod+shift+t",
+  },
+  {
+    id: "toggle-bold",
+    label: "Bold",
+    description: "Make the selection bold, or plain again",
+    defaultBinding: "mod+b",
+  },
+  {
+    id: "toggle-italic",
+    label: "Italic",
+    description: "Make the selection italic, or plain again",
+    defaultBinding: "mod+i",
+  },
+  {
+    id: "insert-link",
+    label: "Insert Link",
+    description: "Turn the selection into a link",
+    defaultBinding: "mod+k",
   },
 ];
 
