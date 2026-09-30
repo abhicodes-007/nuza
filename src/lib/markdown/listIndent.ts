@@ -201,20 +201,23 @@ function indentDecoration(indent: number, hang: number, quoted: boolean) {
   });
 }
 
-function build(view: EditorView): DecorationSet {
+/** Every list line on screen, in document order. */
+function visibleListLines(view: EditorView): ListLine[] {
+  return view.visibleRanges.flatMap(({ from, to }) => listLines(view.state, from, to));
+}
+
+function build(view: EditorView, lines: readonly ListLine[]): DecorationSet {
   const known = view.state.field(prefixWidths);
   const out: Range<Decoration>[] = [];
 
-  for (const { from, to } of view.visibleRanges) {
-    for (const line of listLines(view.state, from, to)) {
-      const indent = widthFor(known, line.anchor);
-      const hang = widthFor(known, line.prefix);
-      // Nothing is drawn from a guess: an unmeasured line is left flush for
-      // the one frame it takes for its width to come back.
-      if (indent === undefined || hang === undefined || indent === 0) continue;
+  for (const line of lines) {
+    const indent = widthFor(known, line.anchor);
+    const hang = widthFor(known, line.prefix);
+    // Nothing is drawn from a guess: an unmeasured line is left flush for
+    // the one frame it takes for its width to come back.
+    if (indent === undefined || hang === undefined || indent === 0) continue;
 
-      out.push(indentDecoration(indent, hang, line.quoted).range(line.from));
-    }
+    out.push(indentDecoration(indent, hang, line.quoted).range(line.from));
   }
 
   return Decoration.set(out, true);
@@ -223,6 +226,12 @@ function build(view: EditorView): DecorationSet {
 export const listIndentation = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    /**
+     * The list lines on screen, walked out of the syntax tree once and shared
+     * by `build` and `measure`. Kept across an update that only brings new
+     * widths, since that moves nothing in the document or the viewport.
+     */
+    lines: ListLine[];
     /**
      * What was last sent off to be remembered. A measurement that refuses to
      * settle would otherwise be dispatched, rebuilt and measured again on
@@ -234,7 +243,8 @@ export const listIndentation = ViewPlugin.fromClass(
     alive = true;
 
     constructor(view: EditorView) {
-      this.decorations = build(view);
+      this.lines = visibleListLines(view);
+      this.decorations = build(view, this.lines);
       this.measure(view);
     }
 
@@ -248,7 +258,10 @@ export const listIndentation = ViewPlugin.fromClass(
         return;
       }
 
-      this.decorations = build(update.view);
+      if (update.docChanged || update.viewportChanged || update.geometryChanged) {
+        this.lines = visibleListLines(update.view);
+      }
+      this.decorations = build(update.view, this.lines);
       this.measure(update.view);
     }
 
@@ -263,13 +276,11 @@ export const listIndentation = ViewPlugin.fromClass(
       const scale = scaleOf(view);
       const wanted = new Map<string, Prefix>();
 
-      for (const { from, to } of view.visibleRanges) {
-        for (const line of listLines(view.state, from, to)) {
-          for (const prefix of [line.anchor, line.prefix]) {
-            if (prefix.key === "" || wanted.has(prefix.key)) continue;
-            if (known.scale === scale && known.widths.has(prefix.key)) continue;
-            wanted.set(prefix.key, prefix);
-          }
+      for (const line of this.lines) {
+        for (const prefix of [line.anchor, line.prefix]) {
+          if (prefix.key === "" || wanted.has(prefix.key)) continue;
+          if (known.scale === scale && known.widths.has(prefix.key)) continue;
+          wanted.set(prefix.key, prefix);
         }
       }
 
