@@ -6,24 +6,71 @@
  * wash - are worked out from all three, so a change to the accent carries
  * through the whole window instead of leaving half of it behind.
  */
+/** What the window is painted as. */
+export type Theme = "dark" | "light";
+/** What was chosen: one of the two, or whichever the system is using. */
+export type ThemeChoice = Theme | "system";
+
+export const THEME_CHOICES: { id: ThemeChoice; label: string }[] = [
+  { id: "dark", label: "Dark" },
+  { id: "light", label: "Light" },
+  { id: "system", label: "System" },
+];
+
 export interface Appearance {
   accent: string;
   /** How much of the desktop shows through, 0 (opaque) to 100 (invisible). */
   transparency: number;
+  theme: ThemeChoice;
 }
 
 /**
- * The window behind everything, and the ink notes are written in. Not settings:
- * a note app that lets you pick both ends of its own contrast is a note app you
- * can make unreadable, so these stay where they were tuned.
+ * The window behind everything, and the ink notes are written in, for each
+ * theme. Not settings on their own: a note app that lets you pick both ends of
+ * its own contrast is a note app you can make unreadable. Swapping the pair as
+ * a whole keeps each one where it was tuned.
  */
-export const BACKGROUND = "#1E1E1E";
-export const FOREGROUND = "#D4D4D8";
+export const THEMES: Record<Theme, { background: string; foreground: string }> = {
+  dark: { background: "#1E1E1E", foreground: "#D4D4D8" },
+  light: { background: "#FBFBFA", foreground: "#3F3F46" },
+};
+
+/**
+ * Colours that are not worked out from the pair: the code in a note, and the
+ * tint that sets the writing surface a shade apart from the chrome. The dark
+ * ones are pastels, which on white would all but disappear.
+ */
+const FIXED: Record<Theme, Record<string, string>> = {
+  dark: {
+    "--nuza-code": "#9696FF",
+    "--nuza-syntax-keyword": "#C792EA",
+    "--nuza-syntax-string": "#96FF96",
+    "--nuza-syntax-number": "#F5C97B",
+    "--nuza-syntax-function": "#9696FF",
+    "--nuza-syntax-type": "#7BD7F5",
+    "--nuza-editor-tint": "rgba(0, 0, 0, 0.2)",
+  },
+  light: {
+    "--nuza-code": "#5151C7",
+    "--nuza-syntax-keyword": "#8A3FC7",
+    "--nuza-syntax-string": "#1F8A3B",
+    "--nuza-syntax-number": "#A8641A",
+    "--nuza-syntax-function": "#4A4AD0",
+    "--nuza-syntax-type": "#0E7490",
+    "--nuza-editor-tint": "rgba(0, 0, 0, 0.03)",
+  },
+};
 
 export const DEFAULT_APPEARANCE: Appearance = {
   accent: "#FF9696",
   transparency: 100,
+  // Dark, as nuza always was: nobody updates into a different-looking app.
+  theme: "dark",
 };
+
+export function isThemeChoice(value: unknown): value is ThemeChoice {
+  return value === "dark" || value === "light" || value === "system";
+}
 
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -52,6 +99,19 @@ function towards(hex: string, target: string, amount: number) {
   return `rgb(${mixed[0]}, ${mixed[1]}, ${mixed[2]})`;
 }
 
+/** `towards`, as `#rrggbb` - for a colour that more colours are worked out from. */
+function towardsHex(hex: string, target: string, amount: number) {
+  const from = channels(hex);
+  const to = channels(target);
+  return `#${from
+    .map((channel, index) =>
+      Math.round(channel + (to[index] - channel) * amount)
+        .toString(16)
+        .padStart(2, "0")
+    )
+    .join("")}`;
+}
+
 /** Whether ink this colour wants a light backdrop behind it. */
 function isLight(hex: string) {
   const [r, g, b] = channels(hex);
@@ -75,11 +135,15 @@ export function appearanceVariables(
    * rather than a pane - so the background is painted solid whatever the
    * transparency setting says.
    */
-  hasBackdrop = true
+  hasBackdrop = true,
+  /** The theme in force - `appearance.theme`, with "system" already settled. */
+  theme: Theme = "dark"
 ): Record<string, string> {
-  const { accent } = appearance;
-  const background = BACKGROUND;
-  const foreground = FOREGROUND;
+  const { background, foreground } = THEMES[theme];
+  // The accent is picked against the dark window. On a light one the same
+  // colour is too pale to read as text - a link, a bullet - so it is taken
+  // down towards the ink first, and everything derived from it follows.
+  const accent = theme === "light" ? towardsHex(appearance.accent, "#000000", 0.28) : appearance.accent;
   const opaque = hasBackdrop ? 1 - clampTransparency(appearance.transparency) / 100 : 1;
   // Headings step away from the background rather than always towards white,
   // so ink on a light background gets darker instead of vanishing.
@@ -100,6 +164,7 @@ export function appearanceVariables(
     "--nuza-heading": towards(foreground, emphasis, 0.45),
     "--nuza-muted": towards(foreground, background, 0.45),
     "--nuza-hairline": withAlpha(foreground, 0.1),
+    "--nuza-rule-strong": withAlpha(foreground, 0.4),
     "--nuza-surface": withAlpha(foreground, 0.045),
     "--nuza-surface-strong": withAlpha(foreground, 0.07),
     "--nuza-selection-idle": withAlpha(foreground, 0.09),
@@ -107,5 +172,7 @@ export function appearanceVariables(
     // Quiet enough to miss, there when looked for.
     "--nuza-scrollbar": withAlpha(foreground, 0.14),
     "--nuza-scrollbar-strong": withAlpha(foreground, 0.28),
+
+    ...FIXED[theme],
   };
 }

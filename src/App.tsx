@@ -374,7 +374,7 @@ function App() {
             surface reads as the deepest layer, with the sidebar and the bars
             above it. Tinted rather than filled so window vibrancy still shows
             through when transparency is on. */}
-        <div className="flex-1 min-w-0 h-full relative flex flex-col overflow-hidden rounded-t-lg bg-black/20 print:block print:h-auto print:overflow-visible print:rounded-none print:bg-transparent">
+        <div className="flex-1 min-w-0 h-full relative flex flex-col overflow-hidden rounded-t-lg bg-[var(--nuza-editor-tint)] print:block print:h-auto print:overflow-visible print:rounded-none print:bg-transparent">
           {/* Above the text rather than over it: the note underneath is what
               the choice is about, and covering it would be a poor way to ask. */}
           <div className="contents print:hidden">

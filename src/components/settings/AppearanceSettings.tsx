@@ -8,7 +8,7 @@ import {
   clampEditorFontSize,
   listSystemFonts,
 } from "@/lib/fonts";
-import { Appearance, clampTransparency } from "@/lib/appearance";
+import { Appearance, THEME_CHOICES, clampTransparency } from "@/lib/appearance";
 import ColorField from "./ColorField";
 import FontPicker from "./FontPicker";
 import SettingRow from "./SettingRow";
@@ -50,6 +50,29 @@ export default function AppearanceSettings({
 
   return (
     <div className="divide-y divide-zinc-800">
+      <SettingRow title="Theme" description="Light or dark, or whichever your system is using">
+        <div
+          role="radiogroup"
+          aria-label="Theme"
+          className="flex rounded-md border border-zinc-700 bg-zinc-800 p-0.5"
+        >
+          {THEME_CHOICES.map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              role="radio"
+              aria-checked={appearance.theme === choice.id}
+              onClick={() => setAppearance({ theme: choice.id })}
+              className={`cursor-pointer rounded px-2.5 py-0.5 text-xs transition-colors ${
+                appearance.theme === choice.id ? "bg-zinc-700 text-white" : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
+      </SettingRow>
+
       <SettingRow
         title="Transparency"
         description={`How much of the desktop shows through (${vibrancyLabel})`}

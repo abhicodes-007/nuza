@@ -14,7 +14,7 @@ const ink = {
   heading: "var(--nuza-heading)",
   muted: "var(--nuza-muted)",
   accent: "var(--nuza-accent)",
-  code: "#9696FF",
+  code: "var(--nuza-code)",
   caret: "var(--nuza-accent)",
   /* Warm, and keyed to the caret: a drag-select reads as one gesture rather
      than as the browser's default blue turning up uninvited. */
@@ -252,7 +252,7 @@ const editorTheme = EditorView.theme(
     ".cm-md-task-done": {
       color: ink.muted,
       textDecoration: "line-through",
-      textDecorationColor: "rgba(255, 255, 255, 0.25)",
+      textDecorationColor: "var(--nuza-scrollbar-strong)",
       transition: "color 160ms ease",
     },
 
@@ -262,7 +262,7 @@ const editorTheme = EditorView.theme(
     ".cm-md-em": { fontStyle: "italic" },
     ".cm-md-strike": {
       textDecoration: "line-through",
-      textDecorationColor: "rgba(255, 255, 255, 0.4)",
+      textDecorationColor: "var(--nuza-rule-strong)",
       color: ink.muted,
     },
     ".cm-md-inline-code": {
@@ -360,7 +360,7 @@ const editorTheme = EditorView.theme(
       transition: "background-color 120ms ease",
     },
     ".cm-md-table tbody tr:hover td": {
-      backgroundColor: "rgba(255, 255, 255, 0.025)",
+      backgroundColor: "var(--nuza-surface)",
     },
 
     /* ---- Frontmatter ---------------------------------------------------- */
@@ -608,13 +608,13 @@ const markdownHighlighting = HighlightStyle.define([
   { tag: t.contentSeparator, color: ink.hairline },
   { tag: [t.processingInstruction, t.meta], color: ink.muted },
 
-  { tag: [t.keyword, t.moduleKeyword], color: "#C792EA" },
+  { tag: [t.keyword, t.moduleKeyword], color: "var(--nuza-syntax-keyword)" },
   { tag: [t.controlKeyword, t.operatorKeyword], color: "var(--nuza-accent)" },
-  { tag: [t.string, t.regexp], color: "#96FF96" },
-  { tag: [t.number, t.bool, t.null], color: "#F5C97B" },
+  { tag: [t.string, t.regexp], color: "var(--nuza-syntax-string)" },
+  { tag: [t.number, t.bool, t.null], color: "var(--nuza-syntax-number)" },
   { tag: [t.variableName, t.propertyName], color: ink.text },
-  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "#9696FF" },
-  { tag: [t.typeName, t.className, t.namespace], color: "#7BD7F5" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "var(--nuza-syntax-function)" },
+  { tag: [t.typeName, t.className, t.namespace], color: "var(--nuza-syntax-type)" },
   { tag: t.comment, color: ink.muted, fontStyle: "italic" },
   { tag: t.invalid, color: "var(--nuza-accent)" },
 ]);
