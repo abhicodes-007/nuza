@@ -20,6 +20,8 @@ import ContextMenu, { ContextMenuItem } from "./ContextMenu";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import SearchResults from "./SearchResults";
 import VaultSwitcher from "./VaultSwitcher";
+import Backlinks from "./Backlinks";
+import { useBacklinks } from "@/hooks/useBacklinks";
 import { Vault } from "@/lib/vaults";
 
 /** What the rest of the app can ask the sidebar to do. */
@@ -88,6 +90,11 @@ function Sidebar({
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [sortOrder, setSortOrder] = usePersistedState<SortOrder>("sidebarSort", "name");
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null);
+  const [backlinksOpen, setBacklinksOpen] = usePersistedState("backlinksOpen", true);
+  // Only for a note in the vault: the scratch note has no name to link to.
+  const inVault = !!rootPath && currentFile.startsWith(rootPath);
+  // Fetched folded too: the count on the heading is worth having on its own.
+  const backlinks = useBacklinks(currentFile, rootPath ?? null, data, inVault);
   // Storage can hold anything; an order that is not one falls back to name.
   const order = SORT_ORDERS.some((option) => option.id === sortOrder) ? sortOrder : "name";
   /** The tree in the order it is shown in. For name order it is the tree itself. */
@@ -635,6 +642,15 @@ function Sidebar({
           </TreeContext.Provider>
         )}
       </div>
+
+      {inVault && (
+        <Backlinks
+          links={backlinks}
+          isOpen={backlinksOpen}
+          onToggle={() => setBacklinksOpen((open) => !open)}
+          onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
+        />
+      )}
 
       <VaultSwitcher
         vaults={vaults}

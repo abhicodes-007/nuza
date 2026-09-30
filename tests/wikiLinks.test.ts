@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { GFM, parser } from "@lezer/markdown";
-import { WikiLink, readWikiLink, resolveWikiLink } from "../src/lib/markdown/wikiLinks";
+import { WikiLink, backlinksTo, readWikiLink, resolveWikiLink } from "../src/lib/markdown/wikiLinks";
 
 const markdown = parser.configure([GFM, WikiLink]);
 
@@ -78,5 +78,31 @@ describe("resolveWikiLink", () => {
   test("finds nothing for a note that is not there", () => {
     expect(resolveWikiLink("missing", notes, root, "/vault")).toBeNull();
     expect(resolveWikiLink("  ", notes, root, "/vault")).toBeNull();
+  });
+});
+
+describe("backlinksTo", () => {
+  const root = "/vault";
+  const notes = ["/vault/Ideas.md", "/vault/work/ideas.md", "/vault/a.md", "/vault/work/b.md"];
+  const link = (from: string, target: string, line = 1) => ({ from, target, line, preview: "" });
+
+  test("finds the links that resolve to the note, labels and headings included", () => {
+    const links = [
+      link("/vault/a.md", "Ideas|my ideas", 3),
+      link("/vault/a.md", "ideas#Later", 1),
+      link("/vault/work/b.md", "ideas"),
+      link("/vault/a.md", "missing"),
+    ];
+    const found = backlinksTo("/vault/Ideas.md", links, notes, root);
+    expect(found.map((l) => `${l.from}:${l.line}`)).toEqual(["/vault/a.md:1", "/vault/a.md:3"]);
+  });
+
+  test("resolves from the linking note's folder", () => {
+    const found = backlinksTo("/vault/work/ideas.md", [link("/vault/work/b.md", "ideas")], notes, root);
+    expect(found).toHaveLength(1);
+  });
+
+  test("leaves out a note's links to itself", () => {
+    expect(backlinksTo("/vault/a.md", [link("/vault/a.md", "a")], notes, root)).toEqual([]);
   });
 });
