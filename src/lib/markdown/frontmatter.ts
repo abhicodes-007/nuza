@@ -99,3 +99,21 @@ export function readFrontmatter(doc: Text, range: FrontmatterRange): Property[] 
 
   return properties;
 }
+
+/**
+ * What to put at the top of `doc` to start a properties block, or null when it
+ * already has one. The block opens with a single property, `key`, for the
+ * first field to select - an empty key is not a key, and the block would be
+ * shown as the text it is rather than as fields.
+ *
+ * A blank line follows the closing fence unless the note already starts with
+ * one: the fence directly above a line of text is where the markdown parser
+ * starts reading `---` as a heading underline.
+ */
+export function frontmatterInsertion(doc: Text): string | null {
+  if (frontmatterRange(doc)) return null;
+
+  const block = "---\nkey: \n---\n";
+  const first = doc.line(1).text;
+  return doc.length === 0 || first.trim() === "" ? block : `${block}\n`;
+}
