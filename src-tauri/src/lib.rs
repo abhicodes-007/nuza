@@ -25,6 +25,17 @@ struct FileEntry {
     // files, and the whole tree crosses the bridge as one string.
     #[serde(skip_serializing_if = "Option::is_none")]
     children: Option<Vec<FileEntry>>,
+    /// Milliseconds since the epoch, for sorting the tree by date. Left off
+    /// when the filesystem does not say - some do not record creation at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    modified: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created: Option<u64>,
+}
+
+fn epoch_millis(time: std::io::Result<SystemTime>) -> Option<u64> {
+    let since = time.ok()?.duration_since(SystemTime::UNIX_EPOCH).ok()?;
+    u64::try_from(since.as_millis()).ok()
 }
 
 /// Entries that are never notes: the dot-directories tools keep their own state
@@ -105,11 +116,16 @@ fn read_tree(
             None => None,
         };
 
+        // The entry's own times, not a link's target's: it is the row that is
+        // being sorted. On Windows this costs nothing, the listing carries it.
+        let metadata = entry.metadata().ok();
         entries.push(FileEntry {
             name,
             path: entry_path.to_string_lossy().into_owned(),
             is_directory,
             children,
+            modified: metadata.as_ref().and_then(|m| epoch_millis(m.modified())),
+            created: metadata.as_ref().and_then(|m| epoch_millis(m.created())),
         });
     }
 
@@ -2523,6 +2539,8 @@ mod tests {
         assert_eq!(names(&tree), ["notes/", "A.md", "b.md"]);
         assert_eq!(names(tree[0].children.as_ref().unwrap()), ["inner.md"]);
         assert!(tree[1].children.is_none());
+        // Every platform records when a file was last written.
+        assert!(tree.iter().all(|entry| entry.modified.is_some()));
     }
 
     /// Past the depth cap a folder is listed, with nothing read inside it.
