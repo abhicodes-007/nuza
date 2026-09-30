@@ -18,6 +18,7 @@ import { readSession, writeSession } from "@/lib/session";
 import { ATTACHMENT_EVENT, announceAttachment, fileNameOf, writeMedia } from "@/lib/media";
 import { isWithin, rewritePath } from "@/lib/path";
 import { ClosedTab, placeAt, rememberClosed } from "@/lib/closedTabs";
+import { moveTab } from "@/lib/tabOrder";
 import { useDocuments } from "./useDocuments";
 
 const UNTITLED_FILE = "untitled.md";
@@ -687,6 +688,11 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     setOpenPaths((paths) => placeAt(paths, path, index));
   }, [selectFile]);
 
+  /** Drags a tab to a new place in the strip; the session records the order. */
+  const reorderTabs = useCallback((path: string, before: number) => {
+    setOpenPaths((paths) => moveTab(paths, path, before));
+  }, []);
+
   /** Moves `step` tabs along, wrapping at either end. */
   const cycleFile = useCallback(
     (step: number) => {
@@ -837,6 +843,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     selectFile,
     openAt,
     reopenClosedTab,
+    reorderTabs,
     closeFile,
     cycleFile,
     switchToRecent,

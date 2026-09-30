@@ -112,6 +112,7 @@ function App() {
     openAt,
     closeFile,
     reopenClosedTab,
+    reorderTabs,
     cycleFile,
     switchToRecent,
     jumpToFile,
@@ -345,6 +346,7 @@ function App() {
         dirtyPaths={dirtyPaths}
         onSelectTab={selectFile}
         onCloseTab={closeFile}
+        onReorderTabs={reorderTabs}
         onCheckUpdates={checkForUpdates}
         onInstallUpdate={installUpdate}
         onOpenSettings={openSettings}

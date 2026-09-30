@@ -12,6 +12,7 @@ interface EditorHeaderProps {
   dirtyPaths: ReadonlySet<string>;
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
+  onReorderTabs: (path: string, before: number) => void;
   onCheckUpdates: () => void;
   onInstallUpdate: () => void;
   onOpenSettings: () => void;
@@ -127,6 +128,7 @@ function EditorHeader({
   dirtyPaths,
   onSelectTab,
   onCloseTab,
+  onReorderTabs,
   onCheckUpdates,
   onInstallUpdate,
   onOpenSettings,
@@ -147,6 +149,7 @@ function EditorHeader({
         dirtyPaths={dirtyPaths}
         onSelect={onSelectTab}
         onClose={onCloseTab}
+        onReorder={onReorderTabs}
       />
 
       <div className="ml-auto flex shrink-0 items-center gap-3">
