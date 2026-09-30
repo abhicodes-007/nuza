@@ -30,11 +30,63 @@
   --nuza-heading: rgb(226, 226, 230);
   --nuza-muted: rgb(139, 139, 146);
   --nuza-hairline: rgba(212, 212, 216, 0.1);
+  --nuza-rule-strong: rgba(212, 212, 216, 0.4);
+  --nuza-code: #9696ff;
+  --nuza-syntax-keyword: #c792ea;
+  --nuza-syntax-string: #96ff96;
+  --nuza-syntax-number: #f5c97b;
+  --nuza-syntax-function: #9696ff;
+  --nuza-syntax-type: #7bd7f5;
+  --nuza-editor-tint: rgba(0, 0, 0, 0.2);
+  --nuza-status-bg: var(--nuza-bg);
   --nuza-surface: rgba(212, 212, 216, 0.045);
   --nuza-surface-strong: rgba(212, 212, 216, 0.07);
   --nuza-selection-idle: rgba(212, 212, 216, 0.09);
   --nuza-scrollbar: rgba(212, 212, 216, 0.14);
   --nuza-scrollbar-strong: rgba(212, 212, 216, 0.28);
+}
+
+/*
+ * The light theme's palette.
+ *
+ * The components are drawn in Tailwind's zinc and gray - a surface in
+ * zinc-800, a border in zinc-700, text in white - which on a light window
+ * would be dark blocks and invisible ink. Tailwind reads every one of those
+ * through a custom property, so the light theme swaps the properties rather
+ * than the classes: each step of the scale takes its mirror's value (800 for
+ * 200, 700 for 300), and white becomes the ink. A surface is still a step off
+ * the background, a border still a line, and nothing has to be written twice.
+ *
+ * Black is left as it is: every black in the app is ink on an accent or a
+ * pastel, which is the same colour on either theme. The rest - the ink, the
+ * accent, the code colours - come from the appearance settings, per theme.
+ */
+:root[data-theme="light"] {
+  --color-white: oklch(21% 0.006 285.885);
+
+  --color-zinc-50: oklch(14.1% 0.005 285.823);
+  --color-zinc-100: oklch(21% 0.006 285.885);
+  --color-zinc-200: oklch(27.4% 0.006 286.033);
+  --color-zinc-300: oklch(37% 0.013 285.805);
+  --color-zinc-400: oklch(44.2% 0.017 285.786);
+  --color-zinc-500: oklch(55.2% 0.016 285.938);
+  --color-zinc-600: oklch(70.5% 0.015 286.067);
+  --color-zinc-700: oklch(87.1% 0.006 286.286);
+  --color-zinc-800: oklch(92% 0.004 286.32);
+  --color-zinc-900: oklch(96.7% 0.001 286.375);
+  --color-zinc-950: oklch(98.5% 0 none);
+
+  --color-gray-50: oklch(13% 0.028 261.692);
+  --color-gray-100: oklch(21% 0.034 264.665);
+  --color-gray-200: oklch(27.8% 0.033 256.848);
+  --color-gray-300: oklch(37.3% 0.034 259.733);
+  --color-gray-400: oklch(44.6% 0.03 256.802);
+  --color-gray-500: oklch(55.1% 0.027 264.364);
+  --color-gray-600: oklch(70.7% 0.022 261.325);
+  --color-gray-700: oklch(87.2% 0.01 258.338);
+  --color-gray-800: oklch(92.8% 0.006 264.531);
+  --color-gray-900: oklch(96.7% 0.003 264.542);
+  --color-gray-950: oklch(98.5% 0.002 247.839);
 }
 
 html,
