@@ -112,3 +112,27 @@ export interface WikiLinkRequest {
 export function followWikiLink(request: WikiLinkRequest) {
   window.dispatchEvent(new CustomEvent<WikiLinkRequest>(WIKI_LINK_EVENT, { detail: request }));
 }
+
+/** A wiki-link written in some note, as `list_wiki_links` returns it. */
+export interface WikiLinkRef {
+  from: string;
+  /** What is between the brackets, as written. */
+  target: string;
+  line: number;
+  preview: string;
+}
+
+/**
+ * The links in the vault that lead to `path`: each resolved by the same rules
+ * following it would use, from the folder of the note it is written in. A
+ * note's links to itself are left out. In path and then line order.
+ */
+export function backlinksTo(path: string, links: WikiLinkRef[], notes: string[], root: string) {
+  return links
+    .filter((link) => {
+      if (link.from === path) return false;
+      const { target } = readWikiLink(link.target);
+      return resolveWikiLink(target, notes, root, folderOf(link.from)) === path;
+    })
+    .sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line);
+}
