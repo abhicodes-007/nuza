@@ -6,7 +6,8 @@ import { draggedPath, endDrag } from "@/lib/dragSource";
 import { searchFiles } from "@/lib/fileSearch";
 import { ContentHit } from "@/lib/contentSearch";
 import { useContentSearch } from "@/hooks/useContentSearch";
-import { fileNameOf } from "@/lib/media";
+import { fileNameOf, relativePath } from "@/lib/media";
+import { copyText } from "@/lib/clipboard";
 import { folderOf, parentRow, rowAfter, visibleRows } from "@/lib/treeNavigation";
 import { report } from "@/lib/notices";
 import { revealLabel } from "@/lib/platform";
@@ -365,6 +366,14 @@ function Sidebar({
     revealItemInDir(path).catch((error) => report(`Couldn't show "${fileNameOf(path)}"`, error));
   }
 
+  /**
+   * Copies a path. The relative one is written the way a link in a note is,
+   * from the vault's root with forward slashes, so it pastes straight into one.
+   */
+  function copyPath(path: string) {
+    copyText(path).catch((error) => report("Couldn't copy the path", error));
+  }
+
   const contextItems: ContextMenuItem[] = useMemo(() => {
     if (!contextMenu) return [];
     const { entry } = contextMenu;
@@ -386,6 +395,8 @@ function Sidebar({
     items.push(
       { label: "Rename", onClick: () => setRenamingPath(entry.path) },
       { label: revealLabel(), onClick: () => revealEntry(entry.path) },
+      { label: "Copy Path", onClick: () => copyPath(entry.path) },
+      { label: "Copy Relative Path", onClick: () => copyPath(relativePath(rootPath ?? "", entry.path)) },
       { label: "Delete", onClick: () => setDeleteTarget(entry), danger: true }
     );
     return items;
