@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import { EditorState, Range, StateField, Text } from "@codemirror/state";
+import { ChangeSet, EditorState, Range, StateField, Text } from "@codemirror/state";
 import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import { FrontmatterRange, frontmatterRange, readFrontmatter } from "./frontmatter";
@@ -197,6 +197,9 @@ const VOID_TAGS = new Set([
 
 type Build = {
   state: EditorState;
+  /** The stretch being decorated. Nothing is kept from outside it. */
+  from: number;
+  to: number;
   directory: string;
   out: Range<Decoration>[];
   /**
@@ -329,7 +332,11 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
   }
 
   if (name === "Blockquote") {
-    eachLine(doc, from, to, (lineStart) => out.push(QUOTE_LINE.range(lineStart)));
+    // Only the lines being decorated: a quote can be the whole note, and
+    // every line of it is marked the same way whichever part is redone.
+    eachLine(doc, Math.max(from, build.from), Math.min(to, build.to), (lineStart) =>
+      out.push(QUOTE_LINE.range(lineStart))
+    );
     return;
   }
 
@@ -540,6 +547,8 @@ function decorateFrontmatter(state: EditorState, range: FrontmatterRange, out: R
 function decorationsIn(state: EditorState, from: number, to: number) {
   const build: Build = {
     state,
+    from,
+    to,
     directory: state.facet(noteDirectory),
     out: [],
     coveredUntil: -1,
@@ -563,7 +572,11 @@ function decorationsIn(state: EditorState, from: number, to: number) {
   // Left unsorted for the caller to sort: a pre-order walk hands us a block's
   // line decoration after the inline decorations that belong to it, so the
   // ranges do not arrive in document order.
-  return build.out;
+  //
+  // The walk enters every node that overlaps the stretch, the blocks around it
+  // included, and one of those may decorate lines well outside it. Those are
+  // already in the set being updated, and adding them again would double them.
+  return build.out.filter((range) => range.from <= to && range.to >= from);
 }
 
 function buildDecorations(state: EditorState): DecorationSet {
@@ -574,29 +587,114 @@ function buildDecorations(state: EditorState): DecorationSet {
 type Span = { from: number; to: number };
 
 /**
+ * The most lines a list or a quote is redone in one piece. Past this, the
+ * part of it around an edit is redone instead.
+ */
+const BLOCK_LINE_BUDGET = 400;
+
+/**
+ * Blocks whose decorations are decided line by line or item by item - a
+ * bullet by its own item and how deep that sits, a quote line by being in a
+ * quote - so a long one can be redone in part. Everything else, a table or a
+ * fenced code block, is decided as a whole and always redone whole.
+ */
+const DIVISIBLE_BLOCKS = new Set(["BulletList", "OrderedList", "ListItem", "Blockquote"]);
+
+function lineSpan(doc: Text, node: SyntaxNode) {
+  return doc.lineAt(node.to).number - doc.lineAt(node.from).number + 1;
+}
+
+function tooLong(doc: Text, node: SyntaxNode) {
+  return DIVISIBLE_BLOCKS.has(node.name) && lineSpan(doc, node) > BLOCK_LINE_BUDGET;
+}
+
+/** The top-level block `pos` sits in, or null outside any. */
+function topLevelBlock(tree: Tree, pos: number) {
+  let node = tree.resolveInner(pos, 1);
+  if (!node.parent) return null;
+  while (node.parent && node.parent.parent) node = node.parent;
+  return node;
+}
+
+/**
  * The outermost block `pos` sits in - a paragraph, a list, a fenced code block.
  * Rebuilding is done a block at a time because a block's decorations are
  * decided together: a table's rows, a quote's lines, the run of text a fence
  * swallows. Re-doing half of one would leave the other half stale.
+ *
+ * With `budgeted`, the climb stops short of a list or quote longer than
+ * `BLOCK_LINE_BUDGET` lines, at the largest block inside it that is not.
+ * In a note that is one long outline the outermost block is the note, and
+ * a keystroke would otherwise redo all of it; an item's bullet does not
+ * depend on one two thousand lines away.
  */
-function enclosingBlock(tree: Tree, pos: number): Span {
+function enclosingBlock(doc: Text, tree: Tree, pos: number, budgeted: boolean): Span {
   let node = tree.resolveInner(pos, 1);
-  while (node.parent && node.parent.parent) node = node.parent;
-  return node.parent ? { from: node.from, to: node.to } : { from: pos, to: pos };
+  if (!node.parent) return { from: pos, to: pos };
+  // Between the items of a long list, or on a quote's blank line, the node
+  // found is the long block itself - and the line is all there is to redo.
+  if (budgeted && tooLong(doc, node)) return { from: pos, to: pos };
+
+  while (node.parent && node.parent.parent) {
+    if (budgeted && tooLong(doc, node.parent)) break;
+    node = node.parent;
+  }
+  return { from: node.from, to: node.to };
 }
 
 /** Grows `span` to whole lines, and to the blocks those lines belong to. */
-function widen(state: EditorState, tree: Tree, span: Span): Span {
+function widen(state: EditorState, tree: Tree, span: Span, budgeted: boolean): Span {
   const length = state.doc.length;
   const start = state.doc.lineAt(Math.max(0, Math.min(span.from, length)));
   const end = state.doc.lineAt(Math.max(0, Math.min(span.to, length)));
-  const head = enclosingBlock(tree, start.from);
-  const tail = enclosingBlock(tree, end.to);
+  const head = enclosingBlock(state.doc, tree, start.from, budgeted);
+  const tail = enclosingBlock(state.doc, tree, end.to, budgeted);
 
+  // A block inside a quote starts after the `>` rather than at the start of
+  // its line, and a span that starts mid-line would throw away the quote
+  // mark in front of it without the walk ever coming back for it.
   return {
-    from: Math.max(0, Math.min(start.from, head.from)),
-    to: Math.min(length, Math.max(end.to, tail.to)),
+    from: state.doc.lineAt(Math.max(0, Math.min(start.from, head.from))).from,
+    to: state.doc.lineAt(Math.min(length, Math.max(end.to, tail.to))).to,
   };
+}
+
+/**
+ * Whether every top-level block an edit touched is the same block after it:
+ * the same kind, starting and ending where the old one maps to.
+ */
+function keepsTopLevelBlocks(
+  startState: EditorState,
+  oldTree: Tree,
+  state: EditorState,
+  newTree: Tree,
+  changes: ChangeSet
+) {
+  let kept = true;
+
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (!kept) return;
+    for (const [a, b] of [
+      [fromA, fromB],
+      [toA, toB],
+    ]) {
+      const before = topLevelBlock(oldTree, Math.min(a, startState.doc.length));
+      const after = topLevelBlock(newTree, Math.min(b, state.doc.length));
+      if (!before || !after) {
+        if (before !== after) kept = false;
+        continue;
+      }
+      if (
+        before.name !== after.name ||
+        changes.mapPos(before.from, -1) !== after.from ||
+        changes.mapPos(before.to, 1) !== after.to
+      ) {
+        kept = false;
+      }
+    }
+  });
+
+  return kept;
 }
 
 /** Overlapping spans folded together, in document order. */
@@ -647,20 +745,25 @@ export const liveMarkdownPreview = StateField.define<DecorationSet>({
     const selectionMoved = !state.selection.eq(startState.selection);
     if (!transaction.docChanged && !selectionMoved) return decorations;
 
+    // A long list or quote is only redone in part while the edit leaves it
+    // standing as it was. One that an edit splits, joins, ends early or turns
+    // into something else is decided afresh from top to bottom.
+    const budgeted = keepsTopLevelBlocks(startState, oldTree, state, newTree, changes);
+
     // Both sides of the transaction have a say. What was edited or had the
     // caret in it needs redoing, and so does wherever those things were
     // before - the blocks they used to belong to are read differently now.
     const spans: Span[] = [];
     const carryOver = (span: Span) => {
-      const widened = widen(startState, oldTree, span);
+      const widened = widen(startState, oldTree, span, budgeted);
       spans.push({ from: changes.mapPos(widened.from, -1), to: changes.mapPos(widened.to, 1) });
     };
 
     for (const range of startState.selection.ranges) carryOver(range);
-    for (const range of state.selection.ranges) spans.push(widen(state, newTree, range));
+    for (const range of state.selection.ranges) spans.push(widen(state, newTree, range, budgeted));
     changes.iterChangedRanges((fromA, toA, fromB, toB) => {
       carryOver({ from: fromA, to: toA });
-      spans.push(widen(state, newTree, { from: fromB, to: toB }));
+      spans.push(widen(state, newTree, { from: fromB, to: toB }, budgeted));
     });
 
     // The properties block is decided as a whole - a caret arriving anywhere in
