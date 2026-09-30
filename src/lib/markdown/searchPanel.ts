@@ -7,10 +7,11 @@ import {
   replaceAll,
   replaceNext,
   search,
+  searchPanelOpen,
   setSearchQuery,
 } from "@codemirror/search";
-import { EditorState, Extension } from "@codemirror/state";
-import { EditorView, Panel, ViewUpdate } from "@codemirror/view";
+import { EditorState, Extension, Prec } from "@codemirror/state";
+import { EditorView, Panel, ViewUpdate, keymap } from "@codemirror/view";
 
 /**
  * Find, and replace, in the open note.
@@ -56,6 +57,33 @@ export function matchPosition(state: EditorState, query: SearchQuery) {
     if (total >= COUNT_LIMIT) return { total, current, capped: true };
   }
   return { total, current, capped: false };
+}
+
+/** How long the bar takes to go, matching the stylesheet's exit animation. */
+const LEAVE_MS = 120;
+
+/**
+ * Closes the bar after letting it fade out. CodeMirror takes a panel's DOM
+ * away the moment it closes, so the exit is played first and the panel
+ * closed when it ends - or straight away where motion is turned down.
+ */
+function closeFindBar(view: EditorView) {
+  const bar = view.dom.querySelector<HTMLElement>(".nz-search");
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  if (!bar || reduced) return closeSearchPanel(view);
+  if (bar.classList.contains("nz-search-leaving")) return true;
+
+  bar.classList.add("nz-search-leaving");
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    closeSearchPanel(view);
+  };
+  bar.addEventListener("animationend", close, { once: true });
+  // In case the animation never reports back - a hidden window, say.
+  setTimeout(close, LEAVE_MS + 80);
+  return true;
 }
 
 function iconButton(icon: string, label: string, onClick: () => void) {
@@ -147,7 +175,7 @@ function createSearchPanel(view: EditorView): Panel {
 
   const previous = iconButton(ICONS.up, "Previous match (Shift+Enter)", () => findPrevious(view));
   const next = iconButton(ICONS.down, "Next match (Enter)", () => findNext(view));
-  const close = iconButton(ICONS.close, "Close (Esc)", () => closeSearchPanel(view));
+  const close = iconButton(ICONS.close, "Close (Esc)", () => closeFindBar(view));
 
   const replaceOne = textButton("Replace", "Replace this match (Enter)", () => replaceNext(view));
   const replaceEvery = textButton("All", "Replace every match (⌘/Ctrl+Enter)", () => replaceAll(view));
@@ -179,7 +207,7 @@ function createSearchPanel(view: EditorView): Panel {
       (event.shiftKey ? findPrevious : findNext)(view);
     } else if (event.key === "Escape") {
       event.preventDefault();
-      closeSearchPanel(view);
+      closeFindBar(view);
     }
   });
   replaceField.addEventListener("keydown", (event) => {
@@ -188,7 +216,7 @@ function createSearchPanel(view: EditorView): Panel {
       (event.metaKey || event.ctrlKey ? replaceAll : replaceNext)(view);
     } else if (event.key === "Escape") {
       event.preventDefault();
-      closeSearchPanel(view);
+      closeFindBar(view);
     }
   });
 
@@ -272,11 +300,23 @@ const searchTheme = EditorView.theme({
     display: "flex",
     flexDirection: "column",
     gap: "6px",
-    animation: "nz-search-in 140ms ease-out",
+    transformOrigin: "top right",
+    animation: "nz-search-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+  },
+  ".nz-search.nz-search-leaving": {
+    animation: `nz-search-out ${LEAVE_MS}ms ease-in forwards`,
+    pointerEvents: "none",
   },
   "@keyframes nz-search-in": {
-    from: { opacity: "0", transform: "translateY(-4px)" },
+    from: { opacity: "0", transform: "translateY(-6px) scale(0.98)" },
     to: { opacity: "1", transform: "none" },
+  },
+  "@keyframes nz-search-out": {
+    from: { opacity: "1", transform: "none" },
+    to: { opacity: "0", transform: "translateY(-6px) scale(0.98)" },
+  },
+  "@media (prefers-reduced-motion: reduce)": {
+    ".nz-search, .nz-search.nz-search-leaving": { animation: "none" },
   },
   ".nz-search-row": { display: "flex", alignItems: "center", gap: "4px" },
   ".nz-search-row[hidden]": { display: "none" },
@@ -373,5 +413,23 @@ const searchTheme = EditorView.theme({
   },
 });
 
+/**
+ * Escape from the note closes the bar the same way - fading out - rather than
+ * through CodeMirror's own binding, which would take it away at once. Vim's
+ * Escape, for leaving insert mode, is Vim's first.
+ */
+const escapeClosesBar = Prec.high(
+  keymap.of([
+    {
+      key: "Escape",
+      run: (view) => (searchPanelOpen(view.state) ? closeFindBar(view) : false),
+    },
+  ])
+);
+
 /** Find and replace: the panel, opened by the usual mod+f. */
-export const findInNote: Extension = [search({ top: true, createPanel: createSearchPanel }), searchTheme];
+export const findInNote: Extension = [
+  search({ top: true, createPanel: createSearchPanel }),
+  searchTheme,
+  escapeClosesBar,
+];
