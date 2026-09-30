@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
 import {
   draggedPath,
@@ -66,6 +66,13 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
   } = useTreeContext();
 
   const detailsRef = useRef<HTMLDetailsElement>(null);
+  /**
+   * Whether this folder's contents have been drawn. Not until it is first
+   * opened: a closed folder still used to render every row beneath it, so a
+   * large vault drew thousands of rows nobody had asked to see. Once drawn
+   * they stay, so closing and reopening a folder costs nothing.
+   */
+  const [contentsShown, setContentsShown] = useState(false);
   const isRenaming = renamingPath === entry.path;
   const isDraggedOver = useIsDragOver(entry.path);
   const isBeingDragged = useIsDragged(entry.path);
@@ -137,6 +144,11 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
         */}
         <details
           ref={detailsRef}
+          // Fired however the folder is opened - a click, the keyboard, the
+          // new-file row, the reveal below - since each sets `open`.
+          onToggle={(event) => {
+            if (event.currentTarget.open) setContentsShown(true);
+          }}
           className="[&[open]>summary>.cm-tree-chevron]:rotate-90 [&[open]>summary>.cm-tree-folder]:hidden [&[open]>summary>.cm-tree-folder-open]:block"
         >
           <summary
@@ -183,9 +195,8 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
             {showCreateRow && (
               <NewEntryRow type={pendingCreate!.type} onSubmit={submitCreate} onCancel={cancelCreate} />
             )}
-            {entry.children?.map((child) => (
-              <MemoisedFileTreeNode key={child.path} entry={child} />
-            ))}
+            {contentsShown &&
+              entry.children?.map((child) => <MemoisedFileTreeNode key={child.path} entry={child} />)}
           </ul>
         </details>
       </li>

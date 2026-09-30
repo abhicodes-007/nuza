@@ -12,7 +12,7 @@ import { folderOf, parentRow, rowAfter, visibleRows } from "@/lib/treeNavigation
 import { report } from "@/lib/notices";
 import { revealLabel } from "@/lib/platform";
 import { FileEntry } from "@/lib/types";
-import { SORT_ORDERS, SortOrder, sortTree } from "@/lib/fileTree";
+import { SORT_ORDERS, SortOrder, parentOf, sortTree } from "@/lib/fileTree";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { TreeContext, TreeActions, ContextMenuState, PendingCreate } from "./TreeContext";
 import FileTreeNode, { NewEntryRow } from "./FileTreeNode";
@@ -358,25 +358,41 @@ function Sidebar({
    *
    * The folds are read and written straight on the DOM rather than mirrored
    * into state: `<details>` owns whether it is open, which is also what lets
-   * the whole tree stay uncontrolled and cheap. A closed `<details>` still
-   * keeps its contents in the document, so the row can be found before any of
-   * its ancestors have been opened.
+   * the whole tree stay uncontrolled and cheap. A folder only draws its rows
+   * once it has been opened, so the note's row may not exist yet: the folders
+   * on the way down are opened from the top, one level at a time as each one
+   * draws its contents, until the row is there to scroll to.
    */
   useEffect(() => {
     const tree = treeRef.current;
-    if (!tree || !currentFile || showResults) return;
+    if (!tree || !currentFile || !rootPath || showResults || !currentFile.startsWith(rootPath)) return;
 
-    const row = tree.querySelector<HTMLElement>(`[data-path="${CSS.escape(currentFile)}"]`);
-    if (!row) return;
-
-    for (let node = row.parentElement; node && node !== tree; node = node.parentElement) {
-      if (node instanceof HTMLDetailsElement) node.open = true;
+    const folders: string[] = [];
+    for (let path = parentOf(currentFile); path.length > rootPath.length; path = parentOf(path)) {
+      folders.unshift(path);
     }
 
-    // `nearest` so a row that is already visible is left where it is, rather
-    // than the panel jumping to centre it on every tab change.
-    row.scrollIntoView({ block: "nearest" });
-  }, [currentFile, data, showResults]);
+    let frame = 0;
+    let tries = folders.length + 4;
+    function reveal() {
+      const find = (path: string) => tree!.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`);
+
+      for (const folder of folders) {
+        const details = find(folder)?.parentElement;
+        if (!(details instanceof HTMLDetailsElement)) break;
+        if (!details.open) details.open = true;
+      }
+
+      const row = find(currentFile);
+      // `nearest` so a row that is already visible is left where it is, rather
+      // than the panel jumping to centre it on every tab change.
+      if (row) row.scrollIntoView({ block: "nearest" });
+      else if (tries-- > 0) frame = requestAnimationFrame(reveal);
+    }
+
+    reveal();
+    return () => cancelAnimationFrame(frame);
+  }, [currentFile, data, rootPath, showResults]);
 
   /** Opens the folder holding `path` in the system's file manager, with it selected. */
   function revealEntry(path: string) {
