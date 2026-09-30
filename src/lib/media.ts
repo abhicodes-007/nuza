@@ -22,14 +22,45 @@ export function fileNameOf(path: string) {
 }
 
 /**
+ * What a path hangs from: a drive (`C:`), a network share (`//server/share`),
+ * the POSIX root (`/`), or nothing for a relative path. Drive letters and
+ * share names are compared without regard to case, as Windows compares them.
+ */
+function rootOf(path: string) {
+  const drive = /^([a-z]):/i.exec(path);
+  if (drive) return `${drive[1].toUpperCase()}:`;
+
+  const share = /^[\\/]{2}([^\\/]+)[\\/]+([^\\/]+)/.exec(path);
+  if (share) return `//${share[1]}/${share[2]}`.toLowerCase();
+
+  return /^[\\/]/.test(path) ? "/" : "";
+}
+
+/**
+ * Segments with the root's own in one case - a drive letter, or a share's
+ * server and name - so `c:` meets `C:`. Only those: below the root, a
+ * folder's name is compared as it is written.
+ */
+function comparable(path: string) {
+  const parts = segments(path);
+  const root = rootOf(path);
+  const fold = root.startsWith("//") ? 2 : /^[A-Z]:$/.test(root) ? 1 : 0;
+  return parts.map((part, index) => (index < fold ? part.toLowerCase() : part));
+}
+
+/**
  * The way from `directory` to `target`, as a relative path. Markdown links are
  * always written with forward slashes: they are read back by splitting on
  * either separator, and a backslash in a link is an escape as often as it is a
  * path on the one platform that uses them.
  */
 export function relativePath(directory: string, target: string) {
-  const from = segments(directory);
-  const to = segments(target);
+  // Paths on different drives, or different network shares, have no way from
+  // one to the other: `../..` never leaves `C:`. The target is given whole.
+  if (rootOf(directory) !== rootOf(target)) return target.replace(/\\/g, "/");
+
+  const from = comparable(directory);
+  const to = comparable(target);
 
   let shared = 0;
   while (shared < from.length && shared < to.length && from[shared] === to[shared]) shared++;

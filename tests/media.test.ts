@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { MAX_ATTACHMENT_BYTES, attachmentProblem, formatSize, writeMedia } from "../src/lib/media";
+import {
+  MAX_ATTACHMENT_BYTES,
+  attachmentProblem,
+  formatSize,
+  relativePath,
+  writeMedia,
+} from "../src/lib/media";
 
 describe("formatSize", () => {
   test("says megabytes the way a person would", () => {
@@ -34,5 +40,30 @@ describe("attachmentProblem", () => {
 
     await expect(writeMedia("/vault/media", "movie.mov", huge)).rejects.toThrow("can't be added");
     expect(read).toBe(false);
+  });
+});
+
+describe("relativePath", () => {
+  test("climbs out of the note's folder and into the target's", () => {
+    expect(relativePath("/vault/notes", "/vault/media/x.png")).toBe("../media/x.png");
+    expect(relativePath("C:\\vault\\notes", "C:\\vault\\media\\x.png")).toBe("../media/x.png");
+  });
+
+  test("gives the whole path when the target is on another drive", () => {
+    expect(relativePath("C:\\vault\\notes", "D:\\media\\x.png")).toBe("D:/media/x.png");
+  });
+
+  test("gives the whole path when the target is on another share, or off it", () => {
+    expect(relativePath("\\\\nas\\notes\\vault", "\\\\other\\pics\\x.png")).toBe("//other/pics/x.png");
+    expect(relativePath("C:\\vault", "\\\\nas\\pics\\x.png")).toBe("//nas/pics/x.png");
+  });
+
+  test("treats a drive letter, or a share name, the same in either case", () => {
+    expect(relativePath("c:\\vault\\notes", "C:\\vault\\media\\x.png")).toBe("../media/x.png");
+    expect(relativePath("\\\\NAS\\Notes\\vault", "\\\\nas\\notes\\media\\x.png")).toBe("../media/x.png");
+  });
+
+  test("still compares folder names below the root as written", () => {
+    expect(relativePath("/vault/Notes", "/vault/notes/x.png")).toBe("../notes/x.png");
   });
 });
