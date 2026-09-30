@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { exit } from "@tauri-apps/plugin-process";
 import { isMacPlatform } from "@/lib/platform";
+import { flushPersistedState } from "./usePersistedState";
 
 /** Fired by the "Quit" item the app puts in the macOS menu bar. */
 const QUIT_EVENT = "menu:quit";
@@ -37,6 +38,9 @@ export function useSaveOnExit(flush: () => Promise<void>) {
         // written is reported, and the app still goes.
         console.error("Failed to save on the way out:", error);
       }
+      // Settings a debounce is still holding - a sidebar width let go of a
+      // moment ago - would otherwise go with the process.
+      flushPersistedState();
       await exit(0);
     }
 
