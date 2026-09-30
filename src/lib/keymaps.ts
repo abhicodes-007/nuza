@@ -16,7 +16,8 @@ export type KeymapAction =
   | "reopen-closed-tab"
   | "toggle-bold"
   | "toggle-italic"
-  | "insert-link";
+  | "insert-link"
+  | "print-note";
 
 export interface KeymapDefinition {
   id: KeymapAction;
@@ -139,6 +140,14 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
     label: "Insert Link",
     description: "Turn the selection into a link",
     defaultBinding: "mod+k",
+  },
+  {
+    // Not mod+p, which finds a file - the one shortcut nuza users reach for
+    // far more often than printing.
+    id: "print-note",
+    label: "Print / Save as PDF",
+    description: "Print the open note, or save it as a PDF from the print dialog",
+    defaultBinding: "mod+shift+p",
   },
 ];
 
