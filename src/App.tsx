@@ -109,6 +109,7 @@ function App() {
     selectFile,
     openAt,
     closeFile,
+    reopenClosedTab,
     cycleFile,
     switchToRecent,
     jumpToFile,
@@ -243,6 +244,7 @@ function App() {
       "previous-tab": () => cycleFile(-1),
       "recent-tab": switchToRecent,
       "close-tab": closeCurrentTab,
+      "reopen-closed-tab": () => void reopenClosedTab(),
     }),
     [
       save,
@@ -253,6 +255,7 @@ function App() {
       cycleFile,
       switchToRecent,
       closeCurrentTab,
+      reopenClosedTab,
       toggleSidebar,
     ]
   );

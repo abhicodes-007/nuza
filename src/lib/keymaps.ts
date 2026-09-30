@@ -12,7 +12,8 @@ export type KeymapAction =
   | "next-tab"
   | "previous-tab"
   | "recent-tab"
-  | "close-tab";
+  | "close-tab"
+  | "reopen-closed-tab";
 
 export interface KeymapDefinition {
   id: KeymapAction;
@@ -109,6 +110,12 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
     label: "Close Tab",
     description: "Close the current tab",
     defaultBinding: "mod+w",
+  },
+  {
+    id: "reopen-closed-tab",
+    label: "Reopen Closed Tab",
+    description: "Bring back the tab closed most recently",
+    defaultBinding: "mod+shift+t",
   },
 ];
 

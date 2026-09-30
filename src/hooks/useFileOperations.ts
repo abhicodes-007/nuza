@@ -17,6 +17,7 @@ import { readScratch, writeScratch } from "@/lib/scratch";
 import { readSession, writeSession } from "@/lib/session";
 import { ATTACHMENT_EVENT, announceAttachment, fileNameOf, writeMedia } from "@/lib/media";
 import { isWithin, rewritePath } from "@/lib/path";
+import { ClosedTab, placeAt, rememberClosed } from "@/lib/closedTabs";
 import { useDocuments } from "./useDocuments";
 
 const UNTITLED_FILE = "untitled.md";
@@ -115,6 +116,10 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const openPathsRef = useRef(openPaths);
   /** Open paths in most-recently-viewed order, so ctrl+tab can flip back. */
   const recentRef = useRef<string[]>([UNTITLED_FILE]);
+  /** Tabs closed this session, most recent last, for reopening. */
+  const closedRef = useRef<ClosedTab[]>([]);
+  const folderDataRef = useRef(folderData);
+  folderDataRef.current = folderData;
 
   currentFileRef.current = currentFile;
   rootPathRef.current = rootPath;
@@ -274,6 +279,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       keepScratch();
       forgetDocuments(() => true);
       resetToScratch();
+      // The tabs closed in the vault being left are no tabs of this one.
+      closedRef.current = [];
 
       sessionVault.current = folder.path;
       sessionReady.current = false;
@@ -646,6 +653,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
       const remaining = paths.filter((p) => p !== path);
       recentRef.current = recentRef.current.filter((p) => p !== path);
+      // The scratch note is never really closed - it is kept either way.
+      if (path !== UNTITLED_FILE) closedRef.current = rememberClosed(closedRef.current, { path, index });
 
       if (remaining.length === 0) {
         resetToScratch();
@@ -659,6 +668,24 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     },
     [resetToScratch, selectFile]
   );
+
+  /**
+   * Brings back the tab closed most recently, in the place it was closed
+   * from. A closed note that has since gone from the vault, or been opened
+   * again some other way, is passed over for the one closed before it.
+   */
+  const reopenClosedTab = useCallback(async () => {
+    const open = new Set(openPathsRef.current);
+    let tab: ClosedTab | undefined;
+    while ((tab = closedRef.current.pop())) {
+      if (!open.has(tab.path) && findEntry(folderDataRef.current, tab.path)) break;
+    }
+    if (!tab) return;
+
+    const { path, index } = tab;
+    await selectFile(path);
+    setOpenPaths((paths) => placeAt(paths, path, index));
+  }, [selectFile]);
 
   /** Moves `step` tabs along, wrapping at either end. */
   const cycleFile = useCallback(
@@ -701,6 +728,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       rewriteDocuments(rename);
       setOpenPaths((paths) => paths.map(rename));
       recentRef.current = recentRef.current.map(rename);
+      closedRef.current = closedRef.current.map((tab) => ({ ...tab, path: rename(tab.path) }));
       if (isWithin(currentFileRef.current, from)) setCurrentFile(rename(currentFileRef.current));
     },
     [rewriteDocuments]
@@ -754,6 +782,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
       const remaining = openPathsRef.current.filter((p) => !isWithin(p, path));
       recentRef.current = recentRef.current.filter((p) => !isWithin(p, path));
+      closedRef.current = closedRef.current.filter((tab) => !isWithin(tab.path, path));
 
       if (remaining.length === 0) {
         resetToScratch();
@@ -790,6 +819,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     flush,
     selectFile,
     openAt,
+    reopenClosedTab,
     closeFile,
     cycleFile,
     switchToRecent,
