@@ -362,11 +362,22 @@ const editorTheme = EditorView.theme(
 
     /* A note's properties: the key stepped back, the value in front of it.
        Quiet enough to scroll past, close enough to read at a glance. */
+    /* The room under the rule is padding, not margin: CodeMirror measures a
+       block widget without its margins, so a margin here left everything
+       below it drawn lower than the editor believed - the gutter's numbers,
+       and where a click landed, both came out a margin's height too high. */
     ".cm-md-props": {
-      margin: "0 0 1.4em",
-      paddingBottom: "0.7em",
-      borderBottom: `1px solid ${ink.hairline}`,
+      position: "relative",
+      paddingBottom: "calc(0.7em + 1px + 1.4em)",
       fontSize: "0.88em",
+    },
+    ".cm-md-props::after": {
+      content: '""',
+      position: "absolute",
+      left: "0",
+      right: "0",
+      bottom: "1.4em",
+      borderTop: `1px solid ${ink.hairline}`,
     },
     ".cm-md-prop": {
       display: "grid",
