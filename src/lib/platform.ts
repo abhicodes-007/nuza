@@ -23,3 +23,14 @@ function platformName(): string {
 export function trashName(): string {
   return /win/i.test(platformName()) ? "Recycle Bin" : "Trash";
 }
+
+/**
+ * What the item that shows a file in the system's file manager is called
+ * here - each platform has its own words for it, and they are the ones
+ * people look for.
+ */
+export function revealLabel(): string {
+  if (isMacPlatform()) return "Reveal in Finder";
+  if (/win/i.test(platformName())) return "Show in Explorer";
+  return "Open Containing Folder";
+}

@@ -1,6 +1,7 @@
 import { memo, Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { ChevronsDownUp, FilePlus, FolderPlus, Search, X } from "lucide-react";
 import { cn } from "cn";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { draggedPath, endDrag } from "@/lib/dragSource";
 import { searchFiles } from "@/lib/fileSearch";
 import { ContentHit } from "@/lib/contentSearch";
@@ -8,6 +9,7 @@ import { useContentSearch } from "@/hooks/useContentSearch";
 import { fileNameOf } from "@/lib/media";
 import { folderOf, parentRow, rowAfter, visibleRows } from "@/lib/treeNavigation";
 import { report } from "@/lib/notices";
+import { revealLabel } from "@/lib/platform";
 import { FileEntry } from "@/lib/types";
 import { TreeContext, TreeActions, ContextMenuState, PendingCreate } from "./TreeContext";
 import FileTreeNode, { NewEntryRow } from "./FileTreeNode";
@@ -358,6 +360,11 @@ function Sidebar({
     row.scrollIntoView({ block: "nearest" });
   }, [currentFile, data, showResults]);
 
+  /** Opens the folder holding `path` in the system's file manager, with it selected. */
+  function revealEntry(path: string) {
+    revealItemInDir(path).catch((error) => report(`Couldn't show "${fileNameOf(path)}"`, error));
+  }
+
   const contextItems: ContextMenuItem[] = useMemo(() => {
     if (!contextMenu) return [];
     const { entry } = contextMenu;
@@ -378,6 +385,7 @@ function Sidebar({
     }
     items.push(
       { label: "Rename", onClick: () => setRenamingPath(entry.path) },
+      { label: revealLabel(), onClick: () => revealEntry(entry.path) },
       { label: "Delete", onClick: () => setDeleteTarget(entry), danger: true }
     );
     return items;
