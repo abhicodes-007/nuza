@@ -123,6 +123,155 @@ fn read_tree(
     Ok(entries)
 }
 
+/// A line of a note that holds what was searched for.
+#[derive(serde::Serialize, Debug, PartialEq)]
+struct ContentHit {
+    path: String,
+    /// 1-based, as an editor counts lines.
+    line: usize,
+    /// Where the match starts in its line, in UTF-16 code units - the unit
+    /// both JavaScript strings and CodeMirror positions are counted in.
+    column: usize,
+    /// The line, cut down around the match when it is long.
+    preview: String,
+    /// Where the match starts and how long it is, within `preview`, in UTF-16.
+    #[serde(rename = "previewStart")]
+    preview_start: usize,
+    #[serde(rename = "matchLength")]
+    match_length: usize,
+}
+
+/// The most hits one search returns: past this, the query wants narrowing.
+const CONTENT_HIT_LIMIT: usize = 200;
+/// The most hits one note contributes, so one long note cannot crowd out the rest.
+const HITS_PER_NOTE: usize = 5;
+/// Notes larger than this are not searched - they are not notes anyone typed.
+const SEARCHABLE_BYTES: u64 = 4 * 1024 * 1024;
+/// How much of a line is shown before the match, and at most in all.
+const PREVIEW_BEFORE: usize = 30;
+const PREVIEW_LENGTH: usize = 120;
+
+fn utf16_len(chars: &[char]) -> usize {
+    chars.iter().map(|c| c.len_utf16()).sum()
+}
+
+/// A character folded for comparison. Only characters whose lower case is a
+/// single character are folded, so a match always spans as many characters
+/// in the line as there are in the query.
+fn fold(c: char) -> char {
+    let mut lower = c.to_lowercase();
+    match (lower.next(), lower.next()) {
+        (Some(single), None) => single,
+        _ => c,
+    }
+}
+
+/// Every place in `text` that `query` matches, ignoring case, as a hit on
+/// `path`. `query` is already folded. At most `limit` are returned.
+fn search_text(path: &str, text: &str, query: &[char], limit: usize) -> Vec<ContentHit> {
+    let mut hits = Vec::new();
+    if query.is_empty() {
+        return hits;
+    }
+
+    for (index, line) in text.lines().enumerate() {
+        let chars: Vec<char> = line.chars().collect();
+        if chars.len() < query.len() {
+            continue;
+        }
+        let folded: Vec<char> = chars.iter().map(|&c| fold(c)).collect();
+        let Some(start) = folded
+            .windows(query.len())
+            .position(|window| window == query)
+        else {
+            continue;
+        };
+
+        let from = start.saturating_sub(PREVIEW_BEFORE);
+        let to = (from + PREVIEW_LENGTH)
+            .max(start + query.len())
+            .min(chars.len());
+        let mut preview = String::new();
+        let mut preview_start = utf16_len(&chars[from..start]);
+        if from > 0 {
+            preview.push('\u{2026}');
+            preview_start += 1;
+        }
+        preview.extend(&chars[from..to]);
+        if to < chars.len() {
+            preview.push('\u{2026}');
+        }
+
+        hits.push(ContentHit {
+            path: path.to_string(),
+            line: index + 1,
+            column: utf16_len(&chars[..start]),
+            preview,
+            preview_start,
+            match_length: utf16_len(&chars[start..start + query.len()]),
+        });
+        if hits.len() >= limit {
+            break;
+        }
+    }
+
+    hits
+}
+
+/// Every markdown note in a tree read by `read_dir_recursive`, in the order
+/// the sidebar lists them.
+fn markdown_notes(entries: &[FileEntry], out: &mut Vec<PathBuf>) {
+    for entry in entries {
+        if let Some(children) = &entry.children {
+            markdown_notes(children, out);
+        } else if Path::new(&entry.name)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            out.push(PathBuf::from(&entry.path));
+        }
+    }
+}
+
+/// Searches the text of every note under `root` for `query`, ignoring case.
+///
+/// The notes are the ones the sidebar lists - the same walk, with the same
+/// folders left out and the same rules for symlinks - so a hit is never in a
+/// note the tree does not show.
+fn search_vault(root: &Path, query: &str) -> Result<Vec<ContentHit>, String> {
+    let query: Vec<char> = query.trim().chars().map(fold).collect();
+    let mut hits = Vec::new();
+    if query.is_empty() {
+        return Ok(hits);
+    }
+
+    let mut notes = Vec::new();
+    markdown_notes(&read_dir_recursive(root)?, &mut notes);
+
+    for note in notes {
+        let remaining = CONTENT_HIT_LIMIT - hits.len();
+        if remaining == 0 {
+            break;
+        }
+        if fs::metadata(&note).map_or(true, |meta| meta.len() > SEARCHABLE_BYTES) {
+            continue;
+        }
+        // Unreadable, or not text: nothing in it to find.
+        let Ok(text) = fs::read_to_string(&note) else {
+            continue;
+        };
+        let path = note.to_string_lossy();
+        hits.extend(search_text(
+            &path,
+            &text,
+            &query,
+            remaining.min(HITS_PER_NOTE),
+        ));
+    }
+
+    Ok(hits)
+}
+
 /// What the app is allowed to touch: the folder that is open, and whatever the
 /// user has pointed at directly through a save dialog.
 ///
@@ -1097,6 +1246,22 @@ async fn write_media(
     .await
 }
 
+/// The lines of the open vault's notes that contain `query`, ignoring case.
+#[tauri::command]
+async fn search_contents(
+    app_handle: tauri::AppHandle,
+    query: String,
+) -> Result<Vec<ContentHit>, String> {
+    off_thread(move || {
+        let root = locked(&app_handle.state::<Vault>().root).clone();
+        let Some(root) = root else {
+            return Ok(Vec::new());
+        };
+        search_vault(&root, &query)
+    })
+    .await
+}
+
 #[tauri::command]
 async fn read_file(app_handle: tauri::AppHandle, path: String) -> Result<String, String> {
     off_thread(move || {
@@ -1589,6 +1754,7 @@ pub fn run() {
             load_folder_picker,
             open_folder,
             read_file,
+            search_contents,
             write_file,
             write_media,
             keep_recovery,
@@ -2384,5 +2550,70 @@ mod tests {
 
         let wrong = tauri::ipc::InvokeBody::Json(serde_json::json!({ "data": "AAH/" }));
         assert!(body_bytes(&wrong).is_err());
+    }
+
+    fn folded(query: &str) -> Vec<char> {
+        query.chars().map(fold).collect()
+    }
+
+    #[test]
+    fn finds_a_line_ignoring_case() {
+        let hits = search_text("n.md", "first\nSecond Line here\nthird", &folded("line"), 5);
+        assert_eq!(
+            hits,
+            [ContentHit {
+                path: "n.md".into(),
+                line: 2,
+                column: 7,
+                preview: "Second Line here".into(),
+                preview_start: 7,
+                match_length: 4,
+            }]
+        );
+    }
+
+    #[test]
+    fn counts_columns_in_utf16() {
+        // The emoji is two UTF-16 units, as it is to CodeMirror.
+        let hits = search_text("n.md", "\u{1F600} caf\u{e9} ok", &folded("OK"), 5);
+        assert_eq!(hits[0].column, 8);
+        assert_eq!(hits[0].preview_start, 8);
+    }
+
+    #[test]
+    fn cuts_a_long_line_down_around_the_match() {
+        let line = format!("{}needle{}", "a".repeat(200), "b".repeat(200));
+        let hit = &search_text("n.md", &line, &folded("needle"), 5)[0];
+        assert!(hit.preview.starts_with('\u{2026}') && hit.preview.ends_with('\u{2026}'));
+        let start = hit.preview_start;
+        let shown: String = hit.preview.chars().skip(start).take(6).collect();
+        assert_eq!(shown, "needle");
+        assert_eq!(hit.column, 200);
+    }
+
+    #[test]
+    fn stops_at_the_limit() {
+        let text = "x\n".repeat(10);
+        assert_eq!(search_text("n.md", &text, &folded("x"), 3).len(), 3);
+    }
+
+    #[test]
+    fn searches_only_the_notes_the_tree_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::create_dir(dir.path().join(".obsidian")).unwrap();
+        fs::write(dir.path().join("a.md"), "has the Word").unwrap();
+        fs::write(dir.path().join("sub").join("b.MD"), "word again").unwrap();
+        fs::write(dir.path().join("c.txt"), "word in a text file").unwrap();
+        fs::write(dir.path().join(".obsidian").join("d.md"), "word hidden").unwrap();
+
+        let hits = search_vault(dir.path(), "  WORD ").unwrap();
+        let mut found: Vec<&str> = hits
+            .iter()
+            .map(|hit| Path::new(&hit.path).file_name().unwrap().to_str().unwrap())
+            .collect();
+        found.sort();
+        assert_eq!(found, ["a.md", "b.MD"]);
+        assert!(search_vault(dir.path(), "   ").unwrap().is_empty());
     }
 }
