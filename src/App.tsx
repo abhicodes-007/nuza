@@ -237,6 +237,17 @@ function App() {
     [editorView]
   );
 
+  /**
+   * Prints the open note. CodeMirror only draws the lines near the screen, and
+   * draws the whole note while printing - which it learns from `beforeprint`,
+   * an event the native print panel does not always send. So it is sent here
+   * first, and the note is laid out in full before the panel reads it.
+   */
+  const printNote = useCallback(() => {
+    window.dispatchEvent(new Event("beforeprint"));
+    invoke("print_page").catch((error) => report("Couldn't open the print dialog", error));
+  }, []);
+
   const keymapHandlers = useMemo(
     () => ({
       "toggle-sidebar": toggleSidebar,
@@ -264,6 +275,7 @@ function App() {
       "toggle-bold": () => format(toggleBold),
       "toggle-italic": () => format(toggleItalic),
       "insert-link": () => format(insertLink),
+      "print-note": printNote,
     }),
     [
       save,
@@ -277,6 +289,7 @@ function App() {
       reopenClosedTab,
       toggleSidebar,
       format,
+      printNote,
     ]
   );
 
@@ -335,50 +348,54 @@ function App() {
 
   return (
     <main
-      className="h-screen flex flex-col text-white overflow-hidden"
+      className="h-screen flex flex-col text-white overflow-hidden print:block print:h-auto print:overflow-visible"
       style={{ backgroundColor: "var(--nuza-bg-alpha)" }}
     >
-      <EditorHeader
-        updateStatus={updateStatus}
-        version={version}
-        openPaths={openPaths}
-        currentFile={currentFile}
-        dirtyPaths={dirtyPaths}
-        onSelectTab={selectFile}
-        onCloseTab={closeFile}
-        onReorderTabs={reorderTabs}
-        onCheckUpdates={checkForUpdates}
-        onInstallUpdate={installUpdate}
-        onOpenSettings={openSettings}
-        onSave={save}
-        onToggleSidebar={toggleSidebar}
-      />
+      <div className="contents print:hidden">
+        <EditorHeader
+          updateStatus={updateStatus}
+          version={version}
+          openPaths={openPaths}
+          currentFile={currentFile}
+          dirtyPaths={dirtyPaths}
+          onSelectTab={selectFile}
+          onCloseTab={closeFile}
+          onReorderTabs={reorderTabs}
+          onCheckUpdates={checkForUpdates}
+          onInstallUpdate={installUpdate}
+          onOpenSettings={openSettings}
+          onSave={save}
+          onToggleSidebar={toggleSidebar}
+        />
+      </div>
 
-      <div className="flex-1 min-h-0 px-4 flex w-full relative z-20">
+      <div className="flex-1 min-h-0 px-4 flex w-full relative z-20 print:block print:p-0">
         {/* The editor sits a shade below the surrounding chrome so the writing
             surface reads as the deepest layer, with the sidebar and the bars
             above it. Tinted rather than filled so window vibrancy still shows
             through when transparency is on. */}
-        <div className="flex-1 min-w-0 h-full relative flex flex-col overflow-hidden rounded-t-lg bg-black/20">
+        <div className="flex-1 min-w-0 h-full relative flex flex-col overflow-hidden rounded-t-lg bg-black/20 print:block print:h-auto print:overflow-visible print:rounded-none print:bg-transparent">
           {/* Above the text rather than over it: the note underneath is what
               the choice is about, and covering it would be a poor way to ask. */}
-          <ChangedOnDisk
-            path={conflicts.has(currentFile) ? currentFile : null}
-            onReload={() => void reloadFromDisk(currentFile)}
-            onKeepMine={() => void keepMine(currentFile)}
-          />
-          {/* Under the conflict bar, on the rare occasion both are up: the
+          <div className="contents print:hidden">
+            <ChangedOnDisk
+              path={conflicts.has(currentFile) ? currentFile : null}
+              onReload={() => void reloadFromDisk(currentFile)}
+              onKeepMine={() => void keepMine(currentFile)}
+            />
+            {/* Under the conflict bar, on the rare occasion both are up: the
               one about what is happening now comes before the one about what
               happened last time. */}
-          <RecoveredEdits
-            path={recovered.has(currentFile) ? currentFile : null}
-            onRestore={() => void restoreRecovered(currentFile)}
-            onDiscard={() => discardRecovered(currentFile)}
-          />
+            <RecoveredEdits
+              path={recovered.has(currentFile) ? currentFile : null}
+              onRestore={() => void restoreRecovered(currentFile)}
+              onDiscard={() => discardRecovered(currentFile)}
+            />
+          </div>
           {/* CodeMirror mounts itself in here and owns the document from then
               on. Nothing about the text passes back through React, which is
               what keeps a keystroke from costing anything at the app level. */}
-          <div ref={editorContainer} onContextMenu={openEditorMenu} className="flex-1 min-h-0" />
+          <div ref={editorContainer} onContextMenu={openEditorMenu} className="flex-1 min-h-0 print:h-auto" />
           {editorMenu && editorView && (
             <ContextMenu
               x={editorMenu.x}
@@ -396,7 +413,7 @@ function App() {
           collapses along with the panel instead of leaving a dead strip.
         */}
         <div
-          className={`h-full shrink-0 overflow-hidden ${isResizing ? "" : "sidebar-transition"}`}
+          className={`h-full shrink-0 overflow-hidden print:hidden ${isResizing ? "" : "sidebar-transition"}`}
           style={{ width: isSidebarOpen ? sidebarWidth + SIDEBAR_GAP : 0 }}
           inert={!isSidebarOpen}
         >
@@ -433,11 +450,13 @@ function App() {
       {/* The Vim bar earns its place for someone who is tracking a mode;
           without Vim there is no mode to track, so the footer steps back to
           what a writer actually wants from it. */}
-      {vimEnabled ? (
-        <StatusBar mode={mode} currentFile={currentFile} subscribeToStats={subscribeToStats} />
-      ) : (
-        <WritingStats subscribeToStats={subscribeToStats} />
-      )}
+      <div className="contents print:hidden">
+        {vimEnabled ? (
+          <StatusBar mode={mode} currentFile={currentFile} subscribeToStats={subscribeToStats} />
+        ) : (
+          <WritingStats subscribeToStats={subscribeToStats} />
+        )}
+      </div>
 
       <FileSearchPalette
         isOpen={isQuickOpenOpen}
@@ -448,7 +467,9 @@ function App() {
         onSelect={selectFile}
       />
 
-      <Notices notices={notices} onDismiss={dismissNotice} hold={noticeHold} />
+      <div className="contents print:hidden">
+        <Notices notices={notices} onDismiss={dismissNotice} hold={noticeHold} />
+      </div>
 
       <SettingsModal
         isOpen={isSettingsOpen}

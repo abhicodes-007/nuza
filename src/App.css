@@ -518,3 +518,74 @@ textarea,
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 }
+
+/*
+ * Printing, and "Save as PDF" in the print dialog: the note on its own, dark
+ * on white, as a document rather than a window.
+ *
+ * The app is laid out as a fixed-height window with the editor scrolling
+ * inside it, which on paper is one page of the note cut off at the bottom -
+ * so every height and overflow on the way down to the text is let go, and
+ * CodeMirror, which draws the whole document while printing, runs on as long
+ * as the note does. The chrome is hidden in the markup with `print:hidden`.
+ *
+ * The colours are the appearance settings' own custom properties, set on the
+ * root element by script - which is why these need !important to win.
+ */
+@page {
+  margin: 18mm 16mm;
+}
+
+@media print {
+  :root {
+    --nuza-fg: #27272a !important;
+    --nuza-heading: #09090b !important;
+    --nuza-muted: #71717a !important;
+    --nuza-hairline: rgba(0, 0, 0, 0.14) !important;
+    --nuza-surface: rgba(0, 0, 0, 0.04) !important;
+    --nuza-surface-strong: rgba(0, 0, 0, 0.07) !important;
+    --nuza-bg: #ffffff !important;
+    --nuza-bg-alpha: #ffffff !important;
+  }
+
+  html,
+  body,
+  #root {
+    height: auto;
+    overflow: visible;
+    background: #ffffff;
+  }
+
+  .cm-editor,
+  .cm-scroller {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .cm-scroller {
+    padding: 0 !important;
+  }
+
+  .cm-content {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  /* Nothing that belongs to editing: the caret, the selection, the numbers
+     in the margin, the controls that only appear on hover. */
+  .cm-cursorLayer,
+  .cm-selectionLayer,
+  .cm-gutters,
+  .cm-md-prop-add,
+  .cm-md-prop-remove,
+  .cm-md-table-add {
+    display: none !important;
+  }
+
+  /* A table or a block of HTML split across two pages reads badly; keep each
+     on one where it fits. */
+  .cm-md-table-wrap,
+  .cm-md-html-block {
+    break-inside: avoid;
+  }
+}

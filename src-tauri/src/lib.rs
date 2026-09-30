@@ -1650,6 +1650,15 @@ fn apply_transparency(window: &tauri::WebviewWindow, enabled: bool) -> Result<bo
 /// One of the two commands that stays on the main thread deliberately: it is
 /// the window it is changing, and a window is the main thread's to touch.
 /// There is no IO here to be slow about either.
+/// Opens the system's print dialog for the window, which is also where a PDF
+/// is saved from. The webview's own `window.print()` does nothing in the
+/// macOS webview, so printing goes through Tauri's. A plain `fn`, so it runs
+/// on the main thread, which is where the print panel has to be shown from.
+#[tauri::command]
+fn print_page(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.print().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn set_transparency(window: tauri::WebviewWindow, enabled: bool) -> Result<bool, String> {
     apply_transparency(&window, enabled)
@@ -1852,6 +1861,7 @@ pub fn run() {
             delete_entry,
             list_system_fonts,
             set_transparency,
+            print_page,
             set_close_tab_shortcut
         ])
         .run(tauri::generate_context!())
