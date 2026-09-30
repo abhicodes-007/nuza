@@ -10,7 +10,11 @@ import { usePersistedState } from "./usePersistedState";
 
 /** The chosen colours, kept on the document root rather than in React state. */
 export function useAppearance(hasBackdrop = true) {
-  const [stored, setStored] = usePersistedState<Appearance>("appearance", DEFAULT_APPEARANCE);
+  const [stored, setStored] = usePersistedState<Appearance>("appearance", DEFAULT_APPEARANCE, {
+    // The transparency slider is a drag: a new value every frame, and only the
+    // last one needs to reach storage.
+    debounceMs: 250,
+  });
 
   // Storage can hold anything; a colour that is not a colour would leave the
   // window painted in the literal string it was given.
