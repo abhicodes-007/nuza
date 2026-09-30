@@ -1512,17 +1512,39 @@ fn is_symbol_font(data: &[u8], index: u32) -> bool {
     else {
         return false;
     };
-    let subtables: Vec<_> = cmap.subtables.into_iter().collect();
-    !subtables.iter().any(|s| s.is_unicode())
-        && subtables
-            .iter()
-            .any(|s| s.platform_id == ttf_parser::PlatformId::Windows && s.encoding_id == 0)
+    // One pass, and out at the first Unicode table - which is most fonts, on
+    // their first subtable.
+    let mut symbol = false;
+    for subtable in cmap.subtables {
+        if subtable.is_unicode() {
+            return false;
+        }
+        symbol |=
+            subtable.platform_id == ttf_parser::PlatformId::Windows && subtable.encoding_id == 0;
+    }
+    symbol
 }
 
 /// Lists the family names of every font installed on the system, sorted
 /// case-insensitively. Async so the font scan runs off the main thread.
 #[tauri::command]
 async fn list_system_fonts() -> Vec<String> {
+    // Parsing every face on the system is the slow part of opening the font
+    // picker, and its answer does not change while the app is running - so it
+    // is worked out once per launch rather than once per webview load. A font
+    // installed while the app is open turns up after a restart.
+    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    if let Some(families) = FAMILIES.get() {
+        return families.clone();
+    }
+
+    // Off the async runtime's threads: this is seconds of blocking file reads.
+    off_thread(|| Ok(FAMILIES.get_or_init(system_font_families).clone()))
+        .await
+        .unwrap_or_default()
+}
+
+fn system_font_families() -> Vec<String> {
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
 
@@ -2699,5 +2721,17 @@ mod tests {
             fs::metadata(copy).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    /// Whatever fonts the machine running this has - CI's may have few - the
+    /// list is sorted, has no repeats and no private dotted families.
+    #[test]
+    fn lists_font_families_sorted_and_public() {
+        let families = system_font_families();
+        let mut sorted = families.clone();
+        sorted.sort_by_key(|name| name.to_lowercase());
+        sorted.dedup();
+        assert_eq!(families, sorted);
+        assert!(families.iter().all(|name| !name.starts_with('.')));
     }
 }
