@@ -282,3 +282,42 @@ export function rendersAnything(fragment: DocumentFragment) {
     fragment.childNodes.length > 0 && (fragment.textContent?.trim() !== "" || !!fragment.querySelector("*"))
   );
 }
+
+/**
+ * Sanitised runs, by directory and source, most recently used last. A
+ * template is never inserted itself - `renderHtml` hands out copies - and
+ * null records a run with nothing left in it once sanitised.
+ */
+const templates = new Map<string, DocumentFragment | null>();
+const TEMPLATE_LIMIT = 128;
+
+function templateFor(html: string, directory: string) {
+  const key = `${directory}\u0000${html}`;
+  let template = templates.get(key);
+
+  if (template === undefined) {
+    const fragment = sanitizeHtml(html, directory);
+    template = rendersAnything(fragment) ? fragment : null;
+    if (templates.size >= TEMPLATE_LIMIT) templates.delete(templates.keys().next().value as string);
+  } else {
+    templates.delete(key);
+  }
+
+  templates.set(key, template);
+  return template;
+}
+
+/**
+ * Whether a run of HTML renders to anything, answered from the same parse
+ * `renderHtml` will draw from - the decoration build asks this for every run
+ * it passes, and the widget it then creates needs the fragment straight after.
+ */
+export function rendersHtml(html: string, directory: string) {
+  return templateFor(html, directory) !== null;
+}
+
+/** A fresh copy of the sanitised DOM for a run of HTML, ready to insert. */
+export function renderHtml(html: string, directory: string) {
+  const template = templateFor(html, directory);
+  return template ? (template.cloneNode(true) as DocumentFragment) : document.createDocumentFragment();
+}

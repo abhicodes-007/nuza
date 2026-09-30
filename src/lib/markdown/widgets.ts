@@ -1,7 +1,7 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { areaField, refresh, textField } from "./fields";
 import { Property, frontmatterRange, readFrontmatter } from "./frontmatter";
-import { sanitizeHtml } from "./sanitize";
+import { renderHtml } from "./sanitize";
 import { safeExternalHref } from "./sources";
 
 /**
@@ -178,7 +178,7 @@ export class HtmlWidget extends WidgetType {
   toDOM() {
     const wrapper = document.createElement(this.block ? "div" : "span");
     wrapper.className = this.block ? "cm-md-html cm-md-html-block" : "cm-md-html";
-    wrapper.appendChild(sanitizeHtml(this.html, this.directory));
+    wrapper.appendChild(renderHtml(this.html, this.directory));
     return wrapper;
   }
 
