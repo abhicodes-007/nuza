@@ -20,6 +20,7 @@ import { ATTACHMENT_EVENT, announceAttachment, fileNameOf, writeMedia } from "@/
 import { isWithin, rewritePath } from "@/lib/path";
 import { ClosedTab, placeAt, rememberClosed } from "@/lib/closedTabs";
 import { moveTab } from "@/lib/tabOrder";
+import { WIKI_LINK_EVENT, WikiLinkRequest, resolveWikiLink } from "@/lib/markdown/wikiLinks";
 import { useDocuments } from "./useDocuments";
 
 const UNTITLED_FILE = "untitled.md";
@@ -774,6 +775,49 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     },
     [writeDocument, selectFile]
   );
+
+  /**
+   * Follows a wiki-link: opens the note it names, or - for a name no note in
+   * the vault has - creates one beside the note the link is in and opens that,
+   * the way a link to a note that is not written yet works in any vault app.
+   * A path to nowhere is only reported: which folders to make is a guess.
+   */
+  useEffect(() => {
+    async function follow(event: Event) {
+      const { target, fromDirectory } = (event as CustomEvent<WikiLinkRequest>).detail;
+      const root = rootPathRef.current;
+      if (!root || !target) return;
+
+      const notes: string[] = [];
+      const collect = (entries: FileEntry[]) => {
+        for (const entry of entries) {
+          if (entry.children) collect(entry.children);
+          else if (/\.md$/i.test(entry.name)) notes.push(entry.path);
+        }
+      };
+      collect(folderDataRef.current);
+
+      const found = resolveWikiLink(target, notes, root, fromDirectory);
+      if (found) {
+        await selectFile(found);
+        return;
+      }
+      if (/[\\/]/.test(target)) {
+        report(`There's no note at "${target}"`);
+        return;
+      }
+
+      try {
+        const name = /\.md$/i.test(target) ? target : `${target}.md`;
+        await createFile(fromDirectory && isWithin(fromDirectory, root) ? fromDirectory : root, name);
+      } catch (error) {
+        report(`Couldn't create "${target}"`, error);
+      }
+    }
+
+    window.addEventListener(WIKI_LINK_EVENT, follow);
+    return () => window.removeEventListener(WIKI_LINK_EVENT, follow);
+  }, [selectFile, createFile]);
 
   const createFolder = useCallback(async (parentPath: string, name: string) => {
     await invoke("create_folder", { parentPath, name });
