@@ -3,6 +3,8 @@ import { ChevronsDownUp, FilePlus, FolderPlus, Search, X } from "lucide-react";
 import { cn } from "cn";
 import { draggedPath, endDrag } from "@/lib/dragSource";
 import { searchFiles } from "@/lib/fileSearch";
+import { ContentHit } from "@/lib/contentSearch";
+import { useContentSearch } from "@/hooks/useContentSearch";
 import { fileNameOf } from "@/lib/media";
 import { folderOf, parentRow, rowAfter, visibleRows } from "@/lib/treeNavigation";
 import { report } from "@/lib/notices";
@@ -27,6 +29,8 @@ interface SidebarProps {
   rootPath?: string | null;
   onOpenFolder?: () => void;
   onFileSelect?: (path: string) => void;
+  /** Opens a note with the caret on a line of it, for a hit in its text. */
+  onOpenAt?: (path: string, line: number, column: number) => void;
   currentFile?: string;
   onCreateFile: (parentPath: string, name: string) => Promise<void> | void;
   onCreateFolder: (parentPath: string, name: string) => Promise<void> | void;
@@ -53,6 +57,7 @@ function Sidebar({
   rootPath,
   onOpenFolder,
   onFileSelect,
+  onOpenAt,
   currentFile = "",
   onCreateFile,
   onCreateFolder,
@@ -84,6 +89,8 @@ function Sidebar({
   const hasFolder = !!data && data.length > 0 && !!rootPath;
 
   const matches = useMemo(() => (isSearching ? searchFiles(data, query) : []), [isSearching, data, query]);
+  const contentHits = useContentSearch(query, isSearching && hasFolder);
+  const resultCount = matches.length + contentHits.length;
   /** With nothing typed the tree stays put, so opening search never blanks the panel. */
   const showResults = isSearching && query.trim().length > 0;
 
@@ -131,6 +138,12 @@ function Sidebar({
     closeSearch();
   }
 
+  function selectHit(hit: ContentHit) {
+    if (onOpenAt) onOpenAt(hit.path, hit.line, hit.column);
+    else onFileSelect?.(hit.path);
+    closeSearch();
+  }
+
   function onSearchKeyDown(event: React.KeyboardEvent) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -147,13 +160,14 @@ function Sidebar({
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setActiveIndex((index) => Math.min(Math.max(index + step, 0), matches.length - 1));
+      setActiveIndex((index) => Math.min(Math.max(index + step, 0), resultCount - 1));
       return;
     }
 
-    if (event.key === "Enter" && matches[activeIndex]) {
+    if (event.key === "Enter" && activeIndex < resultCount) {
       event.preventDefault();
-      selectResult(matches[activeIndex].entry.path);
+      if (activeIndex < matches.length) selectResult(matches[activeIndex].entry.path);
+      else selectHit(contentHits[activeIndex - matches.length]);
     }
   }
 
@@ -475,7 +489,7 @@ function Sidebar({
             <input
               ref={searchRef}
               value={query}
-              placeholder="Find a file"
+              placeholder="Find a file or text"
               aria-label="Search files"
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -539,10 +553,13 @@ function Sidebar({
         {showResults ? (
           <SearchResults
             matches={matches}
+            contentHits={contentHits}
+            rootPath={rootPath ?? ""}
             activeIndex={activeIndex}
             currentFile={currentFile}
             onHover={setActiveIndex}
             onSelect={selectResult}
+            onSelectHit={selectHit}
           />
         ) : !hasFolder ? (
           <div className="mt-2 flex flex-1 flex-col items-center justify-start gap-3 text-center">

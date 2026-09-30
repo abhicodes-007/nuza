@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Extension } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { FileEntry } from "@/lib/types";
 import {
   addEntry,
@@ -91,6 +92,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     subscribeToStats,
     open: openDocument,
     replace: replaceDocument,
+    showing: showingDocument,
     isOpen: isDocumentOpen,
     read: readDocument,
     revision: documentRevision,
@@ -609,6 +611,29 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   );
 
   /**
+   * Opens `path` with the caret on `line` (1-based) at `column`, counted in
+   * UTF-16 units the way the editor counts positions - where a search hit in
+   * the note's text was found. Left where it opened if something else was
+   * asked for while the note was being read, or if the note is shorter now
+   * than when it was searched.
+   */
+  const openAt = useCallback(
+    async (path: string, line: number, column: number) => {
+      await selectFile(path);
+      const view = editorView;
+      if (!view || showingDocument() !== path) return;
+
+      const doc = view.state.doc;
+      if (line < 1 || line > doc.lines) return;
+      const target = doc.line(line);
+      const anchor = Math.min(target.from + column, target.to);
+      view.dispatch({ selection: { anchor }, effects: EditorView.scrollIntoView(anchor, { y: "center" }) });
+      view.focus();
+    },
+    [selectFile, editorView, showingDocument]
+  );
+
+  /**
    * Closes a tab, falling back to its right-hand neighbour (then its left) so
    * focus lands somewhere predictable. The document itself is kept around, so
    * reopening a file restores unsaved edits rather than silently dropping them.
@@ -764,6 +789,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     saveDirty,
     flush,
     selectFile,
+    openAt,
     closeFile,
     cycleFile,
     switchToRecent,

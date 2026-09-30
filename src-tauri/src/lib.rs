@@ -147,8 +147,9 @@ const CONTENT_HIT_LIMIT: usize = 200;
 const HITS_PER_NOTE: usize = 5;
 /// Notes larger than this are not searched - they are not notes anyone typed.
 const SEARCHABLE_BYTES: u64 = 4 * 1024 * 1024;
-/// How much of a line is shown before the match, and at most in all.
-const PREVIEW_BEFORE: usize = 30;
+/// How much of a line is shown before the match, and at most in all. Kept
+/// short in front: the sidebar is narrow, and the row cuts the end off.
+const PREVIEW_BEFORE: usize = 12;
 const PREVIEW_LENGTH: usize = 120;
 
 fn utf16_len(chars: &[char]) -> usize {
