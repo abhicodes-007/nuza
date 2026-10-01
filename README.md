@@ -2,7 +2,9 @@
 
 **nuza** is a lightning-fast, privacy-first, and fully open-source alternative to Obsidian. Built natively with Tauri and React, it delivers a deeply integrated desktop experience that stays out of your way.
 
-<img src="public/showcase.jpeg" alt="The nuza window: a note rendering as it is written, the vault's file tree beside it, open tabs across the top and the Vim mode indicator in the status bar" width="100%" />
+<video src="https://nuza-cdn.puang.in/nuza-intro-v3.mp4" controls muted loop playsinline width="100%">
+  A note rendering as it is written, the vault's file tree beside it, open tabs across the top and the Vim mode indicator in the status bar.
+</video>
 
 Featuring a beautifully minimalist UI, native Vim keybindings out of the box, and a strictly local file-system approach, **nuza** is designed for developers and writers who demand absolute control over their notes without the bloat.
 
