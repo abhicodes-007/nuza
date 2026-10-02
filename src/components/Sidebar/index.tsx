@@ -666,21 +666,22 @@ function Sidebar({
       </div>
 
       {rootPath && (
-        <Tags
-          index={tags}
-          isOpen={tagsOpen}
-          onToggle={() => setTagsOpen((open) => !open)}
-          onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
-        />
-      )}
-
-      {inVault && (
-        <Backlinks
-          links={backlinks}
-          isOpen={backlinksOpen}
-          onToggle={() => setBacklinksOpen((open) => !open)}
-          onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
-        />
+        <div className="shrink-0 border-t border-zinc-800/70 px-1.5 py-1">
+          <Tags
+            index={tags}
+            isOpen={tagsOpen}
+            onToggle={() => setTagsOpen((open) => !open)}
+            onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
+          />
+          {inVault && (
+            <Backlinks
+              links={backlinks}
+              isOpen={backlinksOpen}
+              onToggle={() => setBacklinksOpen((open) => !open)}
+              onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
+            />
+          )}
+        </div>
       )}
 
       <VaultSwitcher

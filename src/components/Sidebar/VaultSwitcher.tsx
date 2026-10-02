@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ChevronsUpDown, FolderOpen, Pencil, X } from "lucide-react";
+import { ChevronsUpDown, FolderClosed, FolderOpen, Pencil, X } from "lucide-react";
 import { cn } from "cn";
 import { Vault } from "@/lib/vaults";
 import { useExitAnimation } from "@/hooks/useExitAnimation";
@@ -79,11 +79,11 @@ function VaultSwitcher({
     "shrink-0 cursor-pointer rounded p-1 text-zinc-600 opacity-0 transition-colors focus:opacity-100 group-hover:opacity-100";
 
   return (
-    <div ref={panel} className="relative shrink-0 border-t border-zinc-800">
+    <div ref={panel} className="relative shrink-0 px-2 pb-2 pt-1">
       {isMounted && (
         <div
           className={cn(
-            "absolute bottom-full left-2 right-2 z-50 mb-1 overflow-hidden rounded-md border border-zinc-700 bg-[var(--nuza-bg)] shadow-xl",
+            "absolute bottom-full left-2 right-2 z-50 overflow-hidden rounded-md border border-zinc-700 bg-[var(--nuza-bg)] shadow-xl",
             // On the way out it stops taking clicks: a row that is fading
             // away should not still be pressable.
             isClosing ? "animate-rise-out pointer-events-none" : "animate-rise-in"
@@ -164,12 +164,21 @@ function VaultSwitcher({
       <button
         onClick={() => (isOpen ? close() : setIsOpen(true))}
         title={currentPath ?? "Choose a vault"}
-        className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-zinc-800/40"
+        aria-expanded={isOpen}
+        // Its own surface, so the vault reads as where you are rather than as
+        // one more list in the stack above it.
+        className={cn(
+          "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors compact:py-1.5",
+          isOpen
+            ? "bg-[var(--nuza-selection-idle)]"
+            : "bg-[var(--nuza-surface-strong)] hover:bg-[var(--nuza-selection-idle)]"
+        )}
       >
-        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-        <span className="truncate text-xs font-semibold text-zinc-300">
+        <FolderClosed className="h-3.5 w-3.5 shrink-0 text-[var(--nuza-accent)]" />
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-zinc-200">
           {current?.name ?? "Choose a vault"}
         </span>
+        <ChevronsUpDown className="h-3 w-3 shrink-0 text-zinc-500" />
       </button>
     </div>
   );
