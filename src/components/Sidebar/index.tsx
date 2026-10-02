@@ -621,7 +621,7 @@ function Sidebar({
           if (files.length) attachFiles(rootPath, files);
           else if (dragging) moveEntry(dragging, rootPath);
         }}
-        className="group/tree flex flex-1 flex-col overflow-y-auto px-2 py-3 outline-none"
+        className="group/tree flex flex-1 flex-col overflow-y-auto px-2 py-3 outline-none compact:py-1.5"
       >
         {showResults ? (
           <SearchResults

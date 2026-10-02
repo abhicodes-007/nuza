@@ -42,7 +42,7 @@ export default function Backlinks({ links, isOpen, onToggle, onOpen }: Backlinks
                     type="button"
                     onClick={() => onOpen(link.from, link.line)}
                     title={`${link.from}:${link.line}`}
-                    className="flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-sm text-zinc-400 transition-colors hover:bg-zinc-800/50 hover:text-zinc-100"
+                    className="flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2 py-1.5 text-left text-sm compact:py-0.5 text-zinc-400 transition-colors hover:bg-zinc-800/50 hover:text-zinc-100"
                   >
                     <span className="flex w-full min-w-0 items-center gap-1.5">
                       <FileIcon name={fileNameOf(link.from)} />

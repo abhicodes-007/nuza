@@ -25,7 +25,7 @@ export function NewEntryRow({
   onCancel: () => void;
 }) {
   return (
-    <li className="flex items-center gap-1.5 py-1 pl-2 pr-2">
+    <li className="flex items-center gap-1.5 py-1 pl-2 pr-2 compact:py-0.5">
       {type === "folder" ? (
         <Folder className="h-4 w-4 shrink-0 text-[var(--nuza-accent)]" />
       ) : (
@@ -170,7 +170,7 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
               e.stopPropagation();
               openContextMenu(e, entry);
             }}
-            className={`flex cursor-pointer list-none items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-zinc-800/25 hover:text-white focus:outline-none focus:ring-1 focus:ring-inset focus:ring-zinc-500 [-webkit-user-drag:element] [&::-webkit-details-marker]:hidden ${
+            className={`flex cursor-pointer list-none items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors compact:py-0.5 hover:bg-zinc-800/25 hover:text-white focus:outline-none focus:ring-1 focus:ring-inset focus:ring-zinc-500 [-webkit-user-drag:element] [&::-webkit-details-marker]:hidden ${
               isDraggedOver ? "bg-zinc-700/50 outline outline-1 outline-zinc-500" : ""
             } ${isBeingDragged ? "opacity-40" : ""}`}
           >
@@ -225,7 +225,7 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
           e.stopPropagation();
           openContextMenu(e, entry);
         }}
-        className={`flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1.5 pl-7 pr-2 text-left text-sm transition-colors focus:outline-none focus:ring-1 focus:ring-inset focus:ring-zinc-500 [-webkit-user-drag:element] ${
+        className={`flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1.5 pl-7 pr-2 text-left text-sm transition-colors compact:py-0.5 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-zinc-500 [-webkit-user-drag:element] ${
           currentFile === entry.path
             ? // The note the editor is actually showing. It lifts when the
               // panel has the keyboard and settles back when the editor takes
