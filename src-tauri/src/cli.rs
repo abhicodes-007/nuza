@@ -197,7 +197,9 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
 
         let target = target_from_args(&args(&["nuza", "./notes/../notes/a.md"]), &root).unwrap();
-        assert_eq!(PathBuf::from(target.path), root.join("notes").join("a.md"));
+        // The same path the app writes everywhere else: on Windows that is
+        // without the `\\?\` canonicalising puts on the front.
+        assert_eq!(target.path, plain(root.join("notes").join("a.md")));
     }
 
     #[test]
