@@ -37,6 +37,7 @@ const INLINE_CLASSES: Record<string, Decoration> = {
   Emphasis: Decoration.mark({ class: "cm-md-em" }),
   Strikethrough: Decoration.mark({ class: "cm-md-strike" }),
   InlineCode: Decoration.mark({ class: "cm-md-inline-code" }),
+  Tag: Decoration.mark({ class: "cm-md-tag" }),
 };
 
 const HEADING_LEVELS: Record<string, number> = {
