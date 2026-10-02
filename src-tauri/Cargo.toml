@@ -49,6 +49,11 @@ tauri-utils = "2"
 # than parking it for as long as the dialog is open - see `wait_for_picker`.
 tokio = { version = "1", features = ["sync"] }
 
+# `nuza <path>` while the app is already open hands the path to the open
+# window rather than starting a second one. Desktop only, like the command.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
+
 # A rename that refuses to replace what is already there. Every platform has
 # one and none of them is `fs::rename`, which is why these are here.
 [target.'cfg(unix)'.dependencies]
