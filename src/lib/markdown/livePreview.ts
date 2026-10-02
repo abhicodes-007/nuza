@@ -444,10 +444,13 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
 
   if (name === "WikiLink") {
     const inner = doc.sliceString(from + 2, to - 2);
-    const { target, label } = readWikiLink(inner);
+    const { target, heading, label } = readWikiLink(inner);
     const link = Decoration.mark({
       class: "cm-md-link cm-md-wikilink",
-      attributes: { "data-wikilink": target },
+      attributes:
+        heading === null
+          ? { "data-wikilink": target }
+          : { "data-wikilink": target, "data-wikilink-heading": heading },
     });
 
     // Being edited, it is all there to edit, with the brackets dimmed.
@@ -469,10 +472,12 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
       ? doc.sliceString(urlNode.from, urlNode.to)
       : doc.sliceString(from, to).replace(/^<|>$/g, "");
     const href = safeExternalHref(target);
+    // `#heading` has no scheme to open, but it is a link to somewhere in this note.
+    const anchor = target.startsWith("#") ? target.slice(1) : null;
     out.push(
       Decoration.mark({
         class: "cm-md-link",
-        attributes: href ? { "data-href": href } : undefined,
+        attributes: href ? { "data-href": href } : anchor ? { "data-anchor": anchor } : undefined,
       }).range(from, to)
     );
     return;
