@@ -86,7 +86,7 @@ function VaultSwitcher({
             "absolute bottom-full left-2 right-2 z-50 overflow-hidden rounded-md border border-zinc-700 bg-[var(--nuza-bg)] shadow-xl",
             // On the way out it stops taking clicks: a row that is fading
             // away should not still be pressable.
-            isClosing ? "animate-rise-out pointer-events-none" : "animate-rise-in"
+            isClosing ? "animate-vault-out pointer-events-none" : "animate-vault-in"
           )}
         >
           {/* Capped at about seven rows: past that the list scrolls rather
@@ -169,9 +169,11 @@ function VaultSwitcher({
         // one more list in the stack above it.
         className={cn(
           "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors compact:py-1.5",
+          // Barely there at rest - the tint of a surface, not a button - and a
+          // step up when it is pointed at or its menu is open.
           isOpen
-            ? "bg-[var(--nuza-selection-idle)]"
-            : "bg-[var(--nuza-surface-strong)] hover:bg-[var(--nuza-selection-idle)]"
+            ? "bg-[var(--nuza-surface-strong)]"
+            : "bg-[var(--nuza-surface)] hover:bg-[var(--nuza-surface-strong)]"
         )}
       >
         <FolderClosed className="h-3.5 w-3.5 shrink-0 text-[var(--nuza-accent)]" />

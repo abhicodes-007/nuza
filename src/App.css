@@ -272,6 +272,25 @@ textarea,
   }
 }
 
+/*
+ * The vault menu grows out of the pill it sits on and folds back into it: more
+ * travel than the other panels, from the pill's own left edge, so it reads as
+ * opening from that button and not as something dropped in above it.
+ */
+@keyframes nuza-vault-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+
+@keyframes nuza-vault-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
+
 @keyframes nuza-rise-out {
   to {
     opacity: 0;
@@ -337,6 +356,16 @@ textarea,
 .animate-rise-out {
   animation: nuza-rise-out 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
   transform-origin: bottom center;
+}
+
+.animate-vault-in {
+  animation: nuza-vault-in 190ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: bottom left;
+}
+
+.animate-vault-out {
+  animation: nuza-vault-out 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  transform-origin: bottom left;
 }
 
 .animate-palette-out {
@@ -563,6 +592,8 @@ textarea,
   .animate-fade-out,
   .animate-panel-out,
   .animate-palette-out,
+  .animate-vault-in,
+  .animate-vault-out,
   .animate-rise-out {
     animation: none;
   }
