@@ -1,4 +1,5 @@
 import { Switch } from "@/components/ui/switch";
+import CommandLineSetting from "./CommandLineSetting";
 import SettingRow from "./SettingRow";
 
 interface GeneralSettingsProps {
@@ -22,6 +23,7 @@ export default function GeneralSettings({
       <SettingRow title="Line Numbers" description="Show line numbers in the editor gutter">
         <Switch checked={showLineNumbers} onCheckedChange={setShowLineNumbers} />
       </SettingRow>
+      <CommandLineSetting />
     </div>
   );
 }

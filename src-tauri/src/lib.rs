@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
+mod cli;
 mod tags;
 
 use notify::{RecursiveMode, Watcher};
@@ -399,6 +400,10 @@ struct Vault {
     /// stops listening to the old one.
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
 }
+
+/// Announced when `nuza <path>` is run while the app is open, carrying what
+/// was asked for.
+const OPEN_TARGET_EVENT: &str = "open-target";
 
 /// Announced when a note has changed underneath the app, carrying its path.
 const FILE_CHANGED_EVENT: &str = "file-changed";
@@ -1404,6 +1409,50 @@ async fn list_wiki_links(app_handle: tauri::AppHandle) -> Result<Vec<WikiLinkRef
     .await
 }
 
+/// What the command line the app was started with asked to open, until the
+/// window has asked for it.
+#[derive(Default)]
+struct LaunchTarget(Mutex<Option<cli::OpenTarget>>);
+
+/// The note or folder the app was started on from a terminal, once: the
+/// window asks as it comes up, and a second ask finds nothing.
+#[tauri::command]
+fn take_launch_target(app_handle: tauri::AppHandle) -> Option<cli::OpenTarget> {
+    locked(&app_handle.state::<LaunchTarget>().0).take()
+}
+
+/// The program as the user would start it: the AppImage itself when that is
+/// what is running, since the executable inside it is gone once it exits.
+fn command_program() -> Result<PathBuf, String> {
+    match std::env::var_os("APPIMAGE") {
+        Some(image) if !image.is_empty() => Ok(PathBuf::from(image)),
+        _ => std::env::current_exe().map_err(|e| e.to_string()),
+    }
+}
+
+fn home_directory() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "Can't tell where your home folder is".to_string())
+}
+
+/// Whether the `nuza` command is installed, for Settings.
+#[tauri::command]
+fn cli_status() -> Result<cli::CliStatus, String> {
+    Ok(cli::status(&home_directory()?, &command_program()?))
+}
+
+#[tauri::command]
+fn install_cli() -> Result<cli::CliStatus, String> {
+    cli::install(&home_directory()?, &command_program()?)
+}
+
+#[tauri::command]
+fn uninstall_cli() -> Result<cli::CliStatus, String> {
+    cli::uninstall(&home_directory()?, &command_program()?)
+}
+
 /// Every `#tag` written in the open vault, for the sidebar's list of them.
 #[tauri::command]
 async fn list_tags(app_handle: tauri::AppHandle) -> Result<Vec<tags::TagRef>, String> {
@@ -1909,7 +1958,25 @@ fn set_close_tab_shortcut(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // First of the plugins, which is what it asks for: a second `nuza` is
+    // stopped before it sets anything else up, and its arguments come here.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+        if let Some(target) = cli::target_from_args(&args, Path::new(&cwd)) {
+            let _ = app.emit(OPEN_TARGET_EVENT, target);
+        }
+        // Whether or not it named anything, the person has just run the
+        // command, and wants to see the app.
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    let builder = builder
         // A note's images and video, served against the open folder rather
         // than against a list of every folder ever opened.
         .register_asynchronous_uri_scheme_protocol(MEDIA_PROTOCOL, |context, request, responder| {
@@ -1928,6 +1995,13 @@ pub fn run() {
             // Empty until a folder is opened, which is also what makes every
             // filesystem command refuse until then.
             app.manage(Vault::default());
+
+            // What `nuza <path>` started this run on, if it did. Read here, not
+            // by the window, so it does not depend on who asks first.
+            let launched = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| cli::target_from_args(&std::env::args().collect::<Vec<_>>(), &cwd));
+            app.manage(LaunchTarget(Mutex::new(launched)));
 
             // A window without a backdrop is a window that paints itself
             // opaque - the frontend already handles that, and it is not worth
@@ -1959,6 +2033,10 @@ pub fn run() {
             search_contents,
             list_wiki_links,
             list_tags,
+            take_launch_target,
+            cli_status,
+            install_cli,
+            uninstall_cli,
             duplicate_entry,
             write_file,
             write_media,

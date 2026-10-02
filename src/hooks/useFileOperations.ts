@@ -20,6 +20,7 @@ import { ATTACHMENT_EVENT, announceAttachment, fileNameOf, writeMedia } from "@/
 import { isWithin, rewritePath } from "@/lib/path";
 import { ClosedTab, placeAt, rememberClosed } from "@/lib/closedTabs";
 import { moveTab } from "@/lib/tabOrder";
+import { OpenTarget, planOpen } from "@/lib/launchTarget";
 import { jumpToHeading } from "@/lib/markdown/headings";
 import { WIKI_LINK_EVENT, WikiLinkRequest, resolveWikiLink } from "@/lib/markdown/wikiLinks";
 import { useDocuments } from "./useDocuments";
@@ -28,6 +29,8 @@ const UNTITLED_FILE = "untitled.md";
 
 /** Announced by the backend when a note changes underneath the app. */
 const FILE_CHANGED_EVENT = "file-changed";
+/** Matches `OPEN_TARGET_EVENT` in lib.rs. */
+const OPEN_TARGET_EVENT = "open-target";
 
 /**
  * What the backend says when it refuses to write a note that has moved on
@@ -242,12 +245,16 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * what keeps a vault with twenty tabs open as quick to launch as an empty one.
    */
   const restoreSession = useCallback(
-    async (folder: OpenedFolder) => {
+    async (folder: OpenedFolder, focus?: string) => {
       const session = readSession(folder.path);
       // Notes deleted or moved since last time are quietly dropped rather than
       // reopened as tabs onto nothing.
       const open = session.open.filter((path) => findEntry(folder.entries, path));
-      const current = open.includes(session.current) ? session.current : open[0];
+      // A note asked for by name - from a terminal - goes in front of whatever
+      // was open, and joins the tabs if it was not one of them.
+      const asked = focus && findEntry(folder.entries, focus) ? focus : undefined;
+      if (asked && !open.includes(asked)) open.push(asked);
+      const current = asked ?? (open.includes(session.current) ? session.current : open[0]);
 
       try {
         if (!current) throw new Error("nothing to reopen");
@@ -273,7 +280,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
   /** Switches the app over to a folder that has already been read. */
   const adoptFolder = useCallback(
-    (folder: OpenedFolder) => {
+    (folder: OpenedFolder, focus?: string) => {
       setRootPath(folder.path);
       setFolderData(folder.entries);
 
@@ -288,7 +295,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
       sessionVault.current = folder.path;
       sessionReady.current = false;
-      void restoreSession(folder);
+      void restoreSession(folder, focus);
 
       onFolderOpened?.(folder.path);
     },
@@ -319,9 +326,9 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * moved or deleted since it was last opened.
    */
   const openVault = useCallback(
-    async (path: string) => {
+    async (path: string, focus?: string) => {
       try {
-        adoptFolder(await invoke<OpenedFolder>("open_folder", { path }));
+        adoptFolder(await invoke<OpenedFolder>("open_folder", { path }), focus);
         return true;
       } catch (error) {
         // The switcher says its own piece about a vault that has moved, and
@@ -835,6 +842,33 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     return () => window.removeEventListener(WIKI_LINK_EVENT, follow);
   }, [selectFile, createFile, showingDocument, editorView]);
 
+  /**
+   * Opens what `nuza <path>` asked for: a folder as the vault, or a note in
+   * the vault it is in - or, if that is not the one open, in its own folder.
+   */
+  const openTarget = useCallback(
+    async (target: OpenTarget) => {
+      const plan = planOpen(target, rootPathRef.current);
+      if (!plan) return;
+
+      if ("select" in plan) {
+        await selectFile(plan.select);
+      } else if (!(await openVault(plan.folder, plan.focus))) {
+        report(`Couldn't open "${plan.folder}"`);
+      }
+    },
+    [selectFile, openVault]
+  );
+
+  // The command run again while the app is open, which hands what it was
+  // asked for to this window instead of starting another.
+  useEffect(() => {
+    const listening = listen<OpenTarget>(OPEN_TARGET_EVENT, ({ payload }) => void openTarget(payload));
+    return () => {
+      void listening.then((unlisten) => unlisten());
+    };
+  }, [openTarget]);
+
   const createFolder = useCallback(async (parentPath: string, name: string) => {
     await invoke("create_folder", { parentPath, name });
     const entry = { name, path: joinPath(parentPath, name), isDirectory: true, children: [] };
@@ -900,6 +934,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     rootPath,
     openFolder,
     openVault,
+    openTarget,
     save,
     saveDirty,
     flush,
