@@ -16,7 +16,8 @@ interface FileSearchPaletteProps {
   /** Notes opened lately, newest first - shown after the open tabs. */
   recentPaths: string[];
   currentFile: string;
-  onSelect: (path: string) => void;
+  /** `beside` is Cmd/Ctrl+Enter: open it in the split rather than in front. */
+  onSelect: (path: string, beside?: boolean) => void;
   /** What the search box asks for. */
   placeholder?: string;
   /** Only markdown notes - for picking a note to link to. */
@@ -67,8 +68,8 @@ function FileSearchPalette({
     listRef.current?.children[activeIndex]?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, matches]);
 
-  function choose(path: string) {
-    onSelect(path);
+  function choose(path: string, beside = false) {
+    onSelect(path, beside);
     onClose();
   }
 
@@ -88,7 +89,8 @@ function FileSearchPalette({
 
     if (event.key === "Enter" && matches[activeIndex]) {
       event.preventDefault();
-      choose(matches[activeIndex].entry.path);
+      // Not for the link picker, whose choice is a note to point at.
+      choose(matches[activeIndex].entry.path, !notesOnly && (event.metaKey || event.ctrlKey));
     }
   }
 
