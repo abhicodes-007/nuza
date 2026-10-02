@@ -240,6 +240,15 @@ const editorTheme = EditorView.theme(
       borderRadius: "0.3em",
       padding: "0.12em 0.35em",
     },
+    /* A tag: the accent, set in a quiet pill so it reads as a label and not as a
+       link - it is not something you follow from here, it is listed in the sidebar. */
+    ".cm-md-tag": {
+      color: ink.accent,
+      backgroundColor: "var(--nuza-accent-faint)",
+      boxShadow: "inset 0 0 0 1px var(--nuza-accent-underline)",
+      borderRadius: "0.6em",
+      padding: "0.05em 0.45em",
+    },
     ".cm-md-link": {
       color: ink.accent,
       textDecoration: "underline",

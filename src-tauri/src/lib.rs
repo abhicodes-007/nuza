@@ -1,5 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 
+mod tags;
+
 use notify::{RecursiveMode, Watcher};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -345,12 +347,14 @@ fn wiki_links_in(from: &str, text: &str) -> Vec<WikiLinkRef> {
     links
 }
 
-/// Every wiki-link in the notes under `root`, the ones the sidebar lists.
-fn vault_wiki_links(root: &Path) -> Result<Vec<WikiLinkRef>, String> {
+/// Reads each of the notes under `root` that the sidebar lists - and that are
+/// small enough, and text - and collects what `scan` finds in them, given the
+/// note's path and its text.
+fn scan_vault<T>(root: &Path, scan: impl Fn(&str, &str) -> Vec<T>) -> Result<Vec<T>, String> {
     let mut notes = Vec::new();
     markdown_notes(&read_dir_recursive(root)?, &mut notes);
 
-    let mut links = Vec::new();
+    let mut found = Vec::new();
     for note in notes {
         if fs::metadata(&note).map_or(true, |meta| meta.len() > SEARCHABLE_BYTES) {
             continue;
@@ -358,9 +362,14 @@ fn vault_wiki_links(root: &Path) -> Result<Vec<WikiLinkRef>, String> {
         let Ok(text) = fs::read_to_string(&note) else {
             continue;
         };
-        links.extend(wiki_links_in(&note.to_string_lossy(), &text));
+        found.extend(scan(&note.to_string_lossy(), &text));
     }
-    Ok(links)
+    Ok(found)
+}
+
+/// Every wiki-link in the notes under `root`, the ones the sidebar lists.
+fn vault_wiki_links(root: &Path) -> Result<Vec<WikiLinkRef>, String> {
+    scan_vault(root, wiki_links_in)
 }
 
 /// What the app is allowed to touch: the folder that is open, and whatever the
@@ -1395,6 +1404,19 @@ async fn list_wiki_links(app_handle: tauri::AppHandle) -> Result<Vec<WikiLinkRef
     .await
 }
 
+/// Every `#tag` written in the open vault, for the sidebar's list of them.
+#[tauri::command]
+async fn list_tags(app_handle: tauri::AppHandle) -> Result<Vec<tags::TagRef>, String> {
+    off_thread(move || {
+        let root = locked(&app_handle.state::<Vault>().root).clone();
+        match root {
+            Some(root) => scan_vault(&root, tags::tags_in),
+            None => Ok(Vec::new()),
+        }
+    })
+    .await
+}
+
 /// The lines of the open vault's notes that contain `query`, ignoring case.
 #[tauri::command]
 async fn search_contents(
@@ -1936,6 +1958,7 @@ pub fn run() {
             read_file,
             search_contents,
             list_wiki_links,
+            list_tags,
             duplicate_entry,
             write_file,
             write_media,
@@ -2871,5 +2894,23 @@ mod tests {
         let links = vault_wiki_links(dir.path()).unwrap();
         assert_eq!(links.len(), 1);
         assert!(links[0].from.ends_with("a.md"));
+    }
+
+    #[test]
+    fn lists_the_tags_in_the_notes_a_vault_shows() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "one #alpha\ntwo #beta").unwrap();
+        fs::create_dir(dir.path().join(".hidden")).unwrap();
+        fs::write(dir.path().join(".hidden").join("c.md"), "#hidden").unwrap();
+        fs::write(dir.path().join("d.txt"), "#text").unwrap();
+
+        let tags = scan_vault(dir.path(), tags::tags_in).unwrap();
+        assert_eq!(
+            tags.iter()
+                .map(|t| (t.tag.as_str(), t.line))
+                .collect::<Vec<_>>(),
+            [("alpha", 1), ("beta", 2)]
+        );
+        assert!(tags[0].from.ends_with("a.md"));
     }
 }
