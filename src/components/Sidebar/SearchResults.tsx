@@ -42,7 +42,7 @@ export default function SearchResults({
 
   const rowClass = (index: number, path: string) =>
     cn(
-      "flex w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+      "flex w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-sm transition-colors compact:py-0.5",
       index === activeIndex ? "bg-zinc-800 text-white" : currentFile === path ? "text-white" : "text-zinc-400"
     );
 

@@ -29,6 +29,8 @@ interface SettingsModalProps {
   appearance: Appearance;
   setAppearance: (change: Partial<Appearance>) => void;
   resetAppearance: () => void;
+  compactMode: boolean;
+  setCompactMode: (enabled: boolean) => void;
   autoUpdateEnabled: boolean;
   setAutoUpdateEnabled: (enabled: boolean) => void;
   editorFont: string;
@@ -56,6 +58,8 @@ export default function SettingsModal({
   appearance,
   setAppearance,
   resetAppearance,
+  compactMode,
+  setCompactMode,
   autoUpdateEnabled,
   setAutoUpdateEnabled,
   editorFont,
@@ -147,6 +151,8 @@ export default function SettingsModal({
                 appearance={appearance}
                 setAppearance={setAppearance}
                 resetAppearance={resetAppearance}
+                compactMode={compactMode}
+                setCompactMode={setCompactMode}
                 editorFont={editorFont}
                 setEditorFont={setEditorFont}
                 editorFontSize={editorFontSize}

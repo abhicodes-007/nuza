@@ -155,7 +155,7 @@ function TabBar({ paths, activePath, dirtyPaths, onSelect, onClose, onReorder }:
                 onSelect(path);
               }
             }}
-            className={`animate-fade-in group relative flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pl-2.5 pr-1 text-xs transition-colors outline-none focus-visible:ring-1 focus-visible:ring-[var(--nuza-accent)] ${
+            className={`animate-fade-in group relative flex h-7 compact:h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-md pl-2.5 pr-1 text-xs transition-colors outline-none focus-visible:ring-1 focus-visible:ring-[var(--nuza-accent)] ${
               isActive ? "bg-zinc-800 text-white" : "text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-300"
             } ${dragged === path ? "opacity-40" : ""}`}
           >

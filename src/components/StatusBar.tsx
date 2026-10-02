@@ -44,7 +44,7 @@ function StatusBar({ mode, currentFile, subscribeToStats }: StatusBarProps) {
 
   return (
     <div
-      className="flex items-center justify-between font-bold font-mono shrink-0 h-7 relative z-10"
+      className="flex items-center justify-between font-bold font-mono shrink-0 h-7 compact:h-6 relative z-10"
       style={{ background: "var(--nuza-status-bg)" }}
     >
       <div className="flex items-center h-full">
