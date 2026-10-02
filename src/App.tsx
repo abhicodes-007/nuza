@@ -26,6 +26,7 @@ import { useRecentFiles } from "./hooks/useRecentFiles";
 import { useResizableSidebar } from "./hooks/useResizableSidebar";
 import { report } from "./lib/notices";
 import { addFrontmatter, addProperty, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
+import { OpenTarget } from "./lib/launchTarget";
 import { wikiLinkText, wikiTargetFor } from "./lib/markdown/wikiLinks";
 import { copyText } from "./lib/clipboard";
 import { directoryOf } from "./lib/markdown";
@@ -117,6 +118,7 @@ function App() {
     rootPath,
     openFolder,
     openVault,
+    openTarget,
     save,
     saveDirty,
     flush,
@@ -167,11 +169,28 @@ function App() {
     if (currentFile) recordRecentFile(currentFile);
   }, [currentFile, recordRecentFile]);
 
+  // What `nuza <path>` started the app on: undefined until the backend has
+  // said, then the target or null. It has to be known before the last vault is
+  // reopened, or the vault would open first and the command's note after it.
+  const [launchTarget, setLaunchTarget] = useState<OpenTarget | null | undefined>(undefined);
+  useEffect(() => {
+    invoke<OpenTarget | null>("take_launch_target")
+      .then(setLaunchTarget)
+      .catch(() => setLaunchTarget(null));
+  }, []);
+
   // Picking up where you left off: the vault most recently opened is reopened
   // on launch, so the app starts in a folder rather than on an empty picker.
+  // A path given on the command line is where it starts instead.
   const reopened = useRef(false);
   useEffect(() => {
-    if (reopened.current) return;
+    if (reopened.current || launchTarget === undefined) return;
+
+    if (launchTarget) {
+      reopened.current = true;
+      void openTarget(launchTarget);
+      return;
+    }
 
     // Marked as done only once there was something to do. Setting it on the
     // first run regardless means an empty list - which is what a vault store
@@ -182,7 +201,7 @@ function App() {
 
     reopened.current = true;
     void openVault(lastUsed.path);
-  }, [vaults, openVault]);
+  }, [vaults, openVault, openTarget, launchTarget]);
 
   // The native effect only has to be on while something is meant to show
   // through; the amount itself is painted by the window's own background.
