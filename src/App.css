@@ -533,7 +533,26 @@ textarea,
     opacity 220ms ease;
 }
 
+/* The heading a link has just brought you to, which settles back into the page. */
+.cm-md-flash {
+  animation: nuza-flash 1.4s ease-out;
+}
+
+@keyframes nuza-flash {
+  from {
+    background-color: var(--nuza-accent-wash);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .cm-md-flash {
+    animation: none;
+    background-color: var(--nuza-accent-wash);
+  }
+
   .animate-fade-in,
   .animate-panel-in,
   .animate-menu-in,

@@ -16,6 +16,7 @@ import { continueListItem, insertNewLine } from "./lists";
 import { liveMarkdownPreview } from "./livePreview";
 import { findInNote } from "./searchPanel";
 import { noteDirectory } from "./sources";
+import { headingFlash, jumpToHeading } from "./headings";
 import { WikiLink, followWikiLink } from "./wikiLinks";
 import { nuzaEditorTheme } from "./theme";
 
@@ -35,7 +36,23 @@ const openLinkOnModClick = EditorView.domEventHandlers({
     const wiki = target?.closest<HTMLElement>("[data-wikilink]")?.dataset.wikilink;
     if (wiki !== undefined) {
       event.preventDefault();
-      followWikiLink({ target: wiki, fromDirectory: view.state.facet(noteDirectory) });
+      const heading =
+        target?.closest<HTMLElement>("[data-wikilink-heading]")?.dataset.wikilinkHeading ?? null;
+      followWikiLink({ target: wiki, heading, fromDirectory: view.state.facet(noteDirectory) });
+      return true;
+    }
+
+    // `[text](#heading)`: a heading further up or down this note.
+    const anchor = target?.closest<HTMLElement>("[data-anchor]")?.dataset.anchor;
+    if (anchor !== undefined) {
+      event.preventDefault();
+      let heading = anchor;
+      try {
+        heading = decodeURIComponent(anchor);
+      } catch {
+        // A stray `%` is not valid percent-encoding; use it as written.
+      }
+      if (!jumpToHeading(view, heading)) report(`There's no heading "${heading}" in this note`);
       return true;
     }
 
@@ -84,6 +101,7 @@ export const liveMarkdown: Extension = [
   EditorView.lineWrapping,
   nuzaEditorTheme,
   liveMarkdownPreview,
+  headingFlash,
   findInNote,
   listIndent,
   openLinkOnModClick,

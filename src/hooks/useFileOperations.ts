@@ -20,6 +20,7 @@ import { ATTACHMENT_EVENT, announceAttachment, fileNameOf, writeMedia } from "@/
 import { isWithin, rewritePath } from "@/lib/path";
 import { ClosedTab, placeAt, rememberClosed } from "@/lib/closedTabs";
 import { moveTab } from "@/lib/tabOrder";
+import { jumpToHeading } from "@/lib/markdown/headings";
 import { WIKI_LINK_EVENT, WikiLinkRequest, resolveWikiLink } from "@/lib/markdown/wikiLinks";
 import { useDocuments } from "./useDocuments";
 
@@ -784,9 +785,23 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    */
   useEffect(() => {
     async function follow(event: Event) {
-      const { target, fromDirectory } = (event as CustomEvent<WikiLinkRequest>).detail;
+      const { target, heading, fromDirectory } = (event as CustomEvent<WikiLinkRequest>).detail;
       const root = rootPathRef.current;
-      if (!root || !target) return;
+      if (!root) return;
+
+      // Once the note is open: the heading the link goes on to, if it has one.
+      const goToHeading = (path: string) => {
+        const view = editorView;
+        if (!heading || !view || showingDocument() !== path) return;
+        if (!jumpToHeading(view, heading)) report(`There's no heading "${heading}" in that note`);
+      };
+
+      // `[[#heading]]`: a heading in the note the link is written in.
+      if (!target) {
+        const here = currentFileRef.current;
+        if (heading && here) goToHeading(here);
+        return;
+      }
 
       const notes: string[] = [];
       const collect = (entries: FileEntry[]) => {
@@ -800,6 +815,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       const found = resolveWikiLink(target, notes, root, fromDirectory);
       if (found) {
         await selectFile(found);
+        goToHeading(found);
         return;
       }
       if (/[\\/]/.test(target)) {
@@ -817,7 +833,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
     window.addEventListener(WIKI_LINK_EVENT, follow);
     return () => window.removeEventListener(WIKI_LINK_EVENT, follow);
-  }, [selectFile, createFile]);
+  }, [selectFile, createFile, showingDocument, editorView]);
 
   const createFolder = useCallback(async (parentPath: string, name: string) => {
     await invoke("create_folder", { parentPath, name });

@@ -5,7 +5,8 @@ import { tags } from "@lezer/highlight";
  * `[[wiki-links]]`: a link to another note by its name, which is how notes in
  * a vault point at each other. `[[note]]` links by name, `[[folder/note]]` by
  * path from the vault's root, `[[note|label]]` shows the label in its place,
- * and a `#heading` after the name is kept but not yet followed.
+ * and a `#heading` after the name - or on its own, for one in the same note -
+ * goes on to that heading once the note is open.
  */
 
 const OPEN_BRACKET = 91;
@@ -104,7 +105,10 @@ export function resolveWikiLink(target: string, notes: string[], root: string, f
 export const WIKI_LINK_EVENT = "nuza-wiki-link";
 
 export interface WikiLinkRequest {
+  /** The note named, or empty for a link to a heading in the note it is written in. */
   target: string;
+  /** The heading to go on to once the note is open. */
+  heading: string | null;
   /** The folder of the note the link is in, which a name is resolved against first. */
   fromDirectory: string;
 }
