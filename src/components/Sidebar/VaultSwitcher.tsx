@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ChevronsUpDown, FolderClosed, FolderOpen, Pencil, X } from "lucide-react";
+import { ChevronsUpDown, FolderOpen, Pencil, Vault as VaultIcon, X } from "lucide-react";
 import { cn } from "cn";
 import { Vault } from "@/lib/vaults";
 import { useExitAnimation } from "@/hooks/useExitAnimation";
@@ -176,7 +176,7 @@ function VaultSwitcher({
             : "bg-[var(--nuza-surface)] hover:bg-[var(--nuza-surface-strong)]"
         )}
       >
-        <FolderClosed className="h-3.5 w-3.5 shrink-0 text-[var(--nuza-accent)]" />
+        <VaultIcon className="h-3.5 w-3.5 shrink-0 text-[var(--nuza-accent)]" />
         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-zinc-200">
           {current?.name ?? "Choose a vault"}
         </span>
