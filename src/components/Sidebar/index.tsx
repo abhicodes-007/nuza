@@ -21,7 +21,9 @@ import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import SearchResults from "./SearchResults";
 import VaultSwitcher from "./VaultSwitcher";
 import Backlinks from "./Backlinks";
+import Tags from "./Tags";
 import { useBacklinks } from "@/hooks/useBacklinks";
+import { useTags } from "@/hooks/useTags";
 import { Vault } from "@/lib/vaults";
 
 /** What the rest of the app can ask the sidebar to do. */
@@ -91,10 +93,14 @@ function Sidebar({
   const [sortOrder, setSortOrder] = usePersistedState<SortOrder>("sidebarSort", "name");
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null);
   const [backlinksOpen, setBacklinksOpen] = usePersistedState("backlinksOpen", true);
+  // Folded to begin with, which is also when it costs nothing: the tags are
+  // only read from the vault while the panel is open.
+  const [tagsOpen, setTagsOpen] = usePersistedState("tagsOpen", false);
   // Only for a note in the vault: the scratch note has no name to link to.
   const inVault = !!rootPath && currentFile.startsWith(rootPath);
   // Fetched folded too: the count on the heading is worth having on its own.
   const backlinks = useBacklinks(currentFile, rootPath ?? null, data, inVault);
+  const tags = useTags(currentFile, rootPath ?? null, data, !!rootPath && tagsOpen);
   // Storage can hold anything; an order that is not one falls back to name.
   const order = SORT_ORDERS.some((option) => option.id === sortOrder) ? sortOrder : "name";
   /** The tree in the order it is shown in. For name order it is the tree itself. */
@@ -658,6 +664,15 @@ function Sidebar({
           </TreeContext.Provider>
         )}
       </div>
+
+      {rootPath && (
+        <Tags
+          index={tags}
+          isOpen={tagsOpen}
+          onToggle={() => setTagsOpen((open) => !open)}
+          onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
+        />
+      )}
 
       {inVault && (
         <Backlinks
