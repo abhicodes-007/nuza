@@ -11,8 +11,10 @@ interface FileSearchPaletteProps {
   isOpen: boolean;
   onClose: () => void;
   data: FileEntry[];
-  /** Files already open as tabs, shown before anything has been typed. */
+  /** Files already open as tabs, shown first before anything has been typed. */
   openPaths: string[];
+  /** Notes opened lately, newest first - shown after the open tabs. */
+  recentPaths: string[];
   currentFile: string;
   onSelect: (path: string) => void;
   /** What the search box asks for. */
@@ -31,6 +33,7 @@ function FileSearchPalette({
   onClose,
   data,
   openPaths,
+  recentPaths,
   currentFile,
   onSelect,
   placeholder = "Search files",
@@ -52,10 +55,13 @@ function FileSearchPalette({
 
   const matches = useMemo(() => {
     if (!isMounted) return [];
-    // With nothing typed, the open tabs are the most likely destinations.
-    const found = query.trim() ? searchFiles(data, query) : matchesForPaths(data, openPaths);
+    // With nothing typed, the open tabs are the most likely destinations,
+    // and then whatever was open lately and has since been closed.
+    const found = query.trim()
+      ? searchFiles(data, query)
+      : matchesForPaths(data, [...new Set([...openPaths, ...recentPaths])]);
     return notesOnly ? found.filter((match) => /\.md$/i.test(match.entry.name)) : found;
-  }, [isMounted, data, openPaths, query, notesOnly]);
+  }, [isMounted, data, openPaths, recentPaths, query, notesOnly]);
 
   useEffect(() => {
     listRef.current?.children[activeIndex]?.scrollIntoView({ block: "nearest" });
