@@ -75,6 +75,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const [keptScratch] = useState(readScratch);
   const [currentFile, setCurrentFile] = useState<string>(UNTITLED_FILE);
   const [openPaths, setOpenPaths] = useState<string[]>([UNTITLED_FILE]);
+  /** The note in the split beside the main pane, if there is one. It has no tab. */
+  const [sideFile, setSideFile] = useState<string | null>(null);
   const [folderData, setFolderData] = useState<FileEntry[]>([]);
   const [rootPath, setRootPath] = useState<string | null>(null);
   /**
@@ -95,6 +97,10 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const {
     container: editorContainer,
     view: editorView,
+    sideContainer,
+    sideView,
+    openSide: openSideDocument,
+    closeSide: closeSideDocument,
     viewGeneration,
     dirtyPaths,
     subscribeToStats,
@@ -289,6 +295,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       // switch. Forgetting it here is what used to throw it away.
       keepScratch();
       forgetDocuments(() => true);
+      setSideFile(null);
       resetToScratch();
       // The tabs closed in the vault being left are no tabs of this one.
       closedRef.current = [];
@@ -613,6 +620,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
         if (mine !== selectionRef.current) return;
 
         openDocument(path, content);
+        // A note the split was showing has moved across to this pane.
+        setSideFile((side) => (side === path ? null : side));
 
         // "The next time that note is opened" is this: a tab being switched
         // back to is already holding whatever was typed in it, and only a read
@@ -629,6 +638,45 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     },
     [isDocumentOpen, openDocument, offerRecovered]
   );
+
+  const sideSelectionRef = useRef(0);
+
+  /**
+   * Shows `path` in the split beside the main pane. A note is in one pane at a
+   * time, so one that has a tab leaves it for the split, and the note in the
+   * main pane cannot be sent there at all. What the split showed before is
+   * closed the way a tab is: kept as it stands, and saved if it has edits.
+   */
+  const openToSide = useCallback(
+    async (path: string) => {
+      try {
+        if (path === currentFileRef.current) return;
+
+        const mine = ++sideSelectionRef.current;
+        const firstRead = !isDocumentOpen(path);
+        const content = firstRead ? await invoke<string>("read_file", { path }) : null;
+
+        // Overtaken, or made the main pane's note while it was being read.
+        if (mine !== sideSelectionRef.current || path === currentFileRef.current) return;
+        if (!openSideDocument(path, content)) return;
+
+        if (firstRead) void offerRecovered(path, content ?? "");
+        setSideFile(path);
+        setOpenPaths((paths) => paths.filter((p) => p !== path));
+        recentRef.current = recentRef.current.filter((p) => p !== path);
+      } catch (error) {
+        report(`Couldn't open "${fileNameOf(path)}"`, error);
+      }
+    },
+    [isDocumentOpen, openSideDocument, offerRecovered]
+  );
+
+  const closeSide = useCallback(() => {
+    // Whatever was being read for the split is no longer wanted.
+    sideSelectionRef.current++;
+    closeSideDocument();
+    setSideFile(null);
+  }, [closeSideDocument]);
 
   /**
    * Opens `path` with the caret on `line` (1-based) at `column`, counted in
@@ -748,6 +796,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       recentRef.current = recentRef.current.map(rename);
       closedRef.current = closedRef.current.map((tab) => ({ ...tab, path: rename(tab.path) }));
       if (isWithin(currentFileRef.current, from)) setCurrentFile(rename(currentFileRef.current));
+      setSideFile((side) => (side && isWithin(side, from) ? rename(side) : side));
     },
     [rewriteDocuments]
   );
@@ -899,6 +948,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       setFolderData((tree) => removeEntry(tree, rootPathRef.current ?? "", path));
 
       forgetDocuments((open) => isWithin(open, path));
+      setSideFile((side) => (side && isWithin(side, path) ? null : side));
 
       const remaining = openPathsRef.current.filter((p) => !isWithin(p, path));
       recentRef.current = recentRef.current.filter((p) => !isWithin(p, path));
@@ -924,6 +974,11 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   return {
     editorContainer,
     editorView,
+    sideContainer,
+    sideView,
+    sideFile,
+    openToSide,
+    closeSide,
     viewGeneration,
     subscribeToStats,
     currentFile,

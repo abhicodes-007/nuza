@@ -40,6 +40,8 @@ interface SidebarProps {
   onFileSelect?: (path: string) => void;
   /** Opens a note with the caret on a line of it, for a hit in its text. */
   onOpenAt?: (path: string, line: number, column: number) => void;
+  /** Opens a note in the split beside the main pane. */
+  onOpenToSide?: (path: string) => void;
   currentFile?: string;
   onCreateFile: (parentPath: string, name: string) => Promise<void> | void;
   onCreateFolder: (parentPath: string, name: string) => Promise<void> | void;
@@ -68,6 +70,7 @@ function Sidebar({
   onOpenFolder,
   onFileSelect,
   onOpenAt,
+  onOpenToSide,
   currentFile = "",
   onCreateFile,
   onCreateFolder,
@@ -436,6 +439,10 @@ function Sidebar({
         { label: "New File", onClick: () => beginCreate("file", entry.path) },
         { label: "New Folder", onClick: () => beginCreate("folder", entry.path) }
       );
+    }
+    // The note in front cannot also be beside itself.
+    if (onOpenToSide && !entry.isDirectory && entry.path !== currentFile) {
+      items.push({ label: "Open to the Side", onClick: () => onOpenToSide(entry.path) });
     }
     items.push({ label: "Rename", onClick: () => setRenamingPath(entry.path) });
     if (!entry.isDirectory) items.push({ label: "Duplicate", onClick: () => duplicateEntry(entry.path) });

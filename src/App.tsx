@@ -10,6 +10,7 @@ import SettingsModal from "./components/SettingsModal";
 import FileSearchPalette from "./components/FileSearchPalette";
 import ChangedOnDisk from "./components/ChangedOnDisk";
 import RecoveredEdits from "./components/RecoveredEdits";
+import SidePane from "./components/SidePane";
 import Notices from "./components/Notices";
 import ContextMenu from "./components/Sidebar/ContextMenu";
 import { useKeymaps, useKeymapListener } from "./hooks/useKeymaps";
@@ -105,6 +106,11 @@ function App() {
   const {
     editorContainer,
     editorView,
+    sideContainer,
+    sideView,
+    sideFile,
+    openToSide,
+    closeSide,
     viewGeneration,
     subscribeToStats,
     currentFile,
@@ -229,57 +235,50 @@ function App() {
    * what is nuza's own. A right-click inside a property's field still gets
    * the webview's - that is a text box, with a text box's menu.
    */
-  const [editorMenu, setEditorMenu] = useState<{ x: number; y: number } | null>(null);
+  const [editorMenu, setEditorMenu] = useState<{ x: number; y: number; view: EditorView } | null>(null);
+  /** The editor the link picker was opened from, for the link to be written into. */
+  const [linkView, setLinkView] = useState<EditorView | null>(null);
   const closeEditorMenu = useCallback(() => setEditorMenu(null), []);
   /** Whether the note picker for a new wiki-link is open. */
   const [isLinkPickerOpen, setIsLinkPickerOpen] = useState(false);
 
-  const openEditorMenu = useCallback(
-    (event: React.MouseEvent) => {
-      if (!editorView) return;
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-      event.preventDefault();
-      setEditorMenu({ x: event.clientX, y: event.clientY });
-    },
-    [editorView]
-  );
+  const openEditorMenu = useCallback((event: React.MouseEvent, view: EditorView | null) => {
+    if (!view) return;
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+    event.preventDefault();
+    setEditorMenu({ x: event.clientX, y: event.clientY, view });
+  }, []);
 
   const selectedText = useCallback(
-    () =>
-      editorView
-        ? editorView.state.selection.ranges
-            .map((range) => editorView.state.sliceDoc(range.from, range.to))
-            .join("\n")
-        : "",
-    [editorView]
+    (view: EditorView) =>
+      view.state.selection.ranges.map((range) => view.state.sliceDoc(range.from, range.to)).join("\n"),
+    []
   );
 
   const copySelection = useCallback(
-    async (cut: boolean) => {
-      if (!editorView) return;
+    async (view: EditorView, cut: boolean) => {
       try {
-        await copyText(selectedText());
-        if (cut) editorView.dispatch(editorView.state.replaceSelection(""), { userEvent: "delete.cut" });
+        await copyText(selectedText(view));
+        if (cut) view.dispatch(view.state.replaceSelection(""), { userEvent: "delete.cut" });
       } catch (error) {
         report(cut ? "Couldn't cut that" : "Couldn't copy that", error);
       }
-      editorView.focus();
+      view.focus();
     },
-    [editorView, selectedText]
+    [selectedText]
   );
 
   // Pasted through the editor's own paste handling, as a keyboard paste is,
   // so lists continue and nothing arrives as anything but text.
-  const pasteClipboard = useCallback(async () => {
-    if (!editorView) return;
-    editorView.focus();
+  const pasteClipboard = useCallback(async (view: EditorView) => {
+    view.focus();
     try {
       const text = await navigator.clipboard.readText();
-      editorView.dispatch(editorView.state.replaceSelection(text), { userEvent: "input.paste" });
+      view.dispatch(view.state.replaceSelection(text), { userEvent: "input.paste" });
     } catch (error) {
       report(`Couldn't paste from here - ${isMacPlatform() ? "⌘" : "Ctrl+"}V still works`, error);
     }
-  }, [editorView]);
+  }, []);
 
   /**
    * Writes a link to the chosen note where the caret is - by name, or by path
@@ -288,7 +287,8 @@ function App() {
    */
   const linkToNote = useCallback(
     (path: string) => {
-      if (!editorView || !rootPath) return;
+      const view = linkView ?? editorView;
+      if (!view || !rootPath) return;
       const notes: string[] = [];
       const collect = (entries: typeof folderData) => {
         for (const entry of entries) {
@@ -298,36 +298,51 @@ function App() {
       };
       collect(folderData);
 
-      const target = wikiTargetFor(path, notes, rootPath, directoryOf(currentFile) || rootPath);
-      const { from, to } = editorView.state.selection.main;
-      const insert = wikiLinkText(target, editorView.state.sliceDoc(from, to));
-      editorView.dispatch({
+      // Resolved from the folder of the note the link is going into, which in
+      // the split is not the one in the main pane.
+      const writingIn = view === sideView && sideFile ? sideFile : currentFile;
+      const target = wikiTargetFor(path, notes, rootPath, directoryOf(writingIn) || rootPath);
+      const { from, to } = view.state.selection.main;
+      const insert = wikiLinkText(target, view.state.sliceDoc(from, to));
+      view.dispatch({
         changes: { from, to, insert },
         selection: { anchor: from + insert.length },
         userEvent: "input",
       });
-      editorView.focus();
+      view.focus();
     },
-    [editorView, rootPath, folderData, currentFile]
+    [linkView, editorView, sideView, sideFile, rootPath, folderData, currentFile]
   );
 
-  const editorMenuItems = useCallback(() => {
-    if (!editorView) return [];
-    const hasSelection = editorView.state.selection.ranges.some((range) => !range.empty);
-    return [
-      ...(hasSelection
-        ? [
-            { label: "Cut", onClick: () => void copySelection(true) },
-            { label: "Copy", onClick: () => void copySelection(false) },
-          ]
-        : []),
-      { label: "Paste", onClick: () => void pasteClipboard() },
-      ...(rootPath ? [{ label: "Link to Note…", onClick: () => setIsLinkPickerOpen(true) }] : []),
-      canAddFrontmatter(editorView)
-        ? { label: "Add Frontmatter", onClick: () => addFrontmatter(editorView) }
-        : { label: "Add Property", onClick: () => addProperty(editorView) },
-    ];
-  }, [editorView, rootPath, copySelection, pasteClipboard]);
+  const editorMenuItems = useCallback(
+    (view: EditorView) => {
+      const hasSelection = view.state.selection.ranges.some((range) => !range.empty);
+      return [
+        ...(hasSelection
+          ? [
+              { label: "Cut", onClick: () => void copySelection(view, true) },
+              { label: "Copy", onClick: () => void copySelection(view, false) },
+            ]
+          : []),
+        { label: "Paste", onClick: () => void pasteClipboard(view) },
+        ...(rootPath
+          ? [
+              {
+                label: "Link to Note…",
+                onClick: () => {
+                  setLinkView(view);
+                  setIsLinkPickerOpen(true);
+                },
+              },
+            ]
+          : []),
+        canAddFrontmatter(view)
+          ? { label: "Add Frontmatter", onClick: () => addFrontmatter(view) }
+          : { label: "Add Property", onClick: () => addProperty(view) },
+      ];
+    },
+    [rootPath, copySelection, pasteClipboard]
+  );
 
   /**
    * Opening the panel puts the keyboard in it, and closing it gives the
@@ -357,9 +372,10 @@ function App() {
    */
   const format = useCallback(
     (command: StateCommand) => {
-      if (editorView?.hasFocus) command(editorView);
+      const focused = editorView?.hasFocus ? editorView : sideView?.hasFocus ? sideView : null;
+      if (focused) command(focused);
     },
-    [editorView]
+    [editorView, sideView]
   );
 
   /**
@@ -499,33 +515,60 @@ function App() {
             surface reads as the deepest layer, with the sidebar and the bars
             above it. Tinted rather than filled so window vibrancy still shows
             through when transparency is on. */}
-        <div className="flex-1 min-w-0 h-full relative flex flex-col overflow-hidden rounded-t-lg bg-[var(--nuza-editor-tint)] print:block print:h-auto print:overflow-visible print:rounded-none print:bg-transparent">
-          {/* Above the text rather than over it: the note underneath is what
+        <div className="flex-1 min-w-0 h-full relative flex overflow-hidden rounded-t-lg bg-[var(--nuza-editor-tint)] print:block print:h-auto print:overflow-visible print:rounded-none print:bg-transparent">
+          <div className="relative flex min-w-0 flex-1 flex-col print:block">
+            {/* Above the text rather than over it: the note underneath is what
               the choice is about, and covering it would be a poor way to ask. */}
-          <div className="contents print:hidden">
-            <ChangedOnDisk
-              path={conflicts.has(currentFile) ? currentFile : null}
-              onReload={() => void reloadFromDisk(currentFile)}
-              onKeepMine={() => void keepMine(currentFile)}
-            />
-            {/* Under the conflict bar, on the rare occasion both are up: the
+            <div className="contents print:hidden">
+              <ChangedOnDisk
+                path={conflicts.has(currentFile) ? currentFile : null}
+                onReload={() => void reloadFromDisk(currentFile)}
+                onKeepMine={() => void keepMine(currentFile)}
+              />
+              {/* Under the conflict bar, on the rare occasion both are up: the
               one about what is happening now comes before the one about what
               happened last time. */}
-            <RecoveredEdits
-              path={recovered.has(currentFile) ? currentFile : null}
-              onRestore={() => void restoreRecovered(currentFile)}
-              onDiscard={() => discardRecovered(currentFile)}
-            />
-          </div>
-          {/* CodeMirror mounts itself in here and owns the document from then
+              <RecoveredEdits
+                path={recovered.has(currentFile) ? currentFile : null}
+                onRestore={() => void restoreRecovered(currentFile)}
+                onDiscard={() => discardRecovered(currentFile)}
+              />
+            </div>
+            {/* CodeMirror mounts itself in here and owns the document from then
               on. Nothing about the text passes back through React, which is
               what keeps a keystroke from costing anything at the app level. */}
-          <div ref={editorContainer} onContextMenu={openEditorMenu} className="flex-1 min-h-0 print:h-auto" />
-          {editorMenu && editorView && (
+            {/* The split's name bar takes this much from its pane, and this keeps
+                the first line of each at the same height. */}
+            {sideFile && <div className="h-8 shrink-0 print:hidden" aria-hidden />}
+            <div
+              ref={editorContainer}
+              onContextMenu={(event) => openEditorMenu(event, editorView)}
+              className="flex-1 min-h-0 print:h-auto"
+            />
+          </div>
+
+          {/* The split: a second note beside the first, with its own editor. */}
+          {sideFile && (
+            <SidePane
+              path={sideFile}
+              isDirty={dirtyPaths.has(sideFile)}
+              hasConflict={conflicts.has(sideFile)}
+              hasRecovered={recovered.has(sideFile)}
+              containerRef={sideContainer}
+              onContextMenu={(event) => openEditorMenu(event, sideView)}
+              onClose={closeSide}
+              onReload={() => void reloadFromDisk(sideFile)}
+              onKeepMine={() => void keepMine(sideFile)}
+              onRestore={() => void restoreRecovered(sideFile)}
+              onDiscard={() => discardRecovered(sideFile)}
+            />
+          )}
+
+          {editorMenu && (
             <ContextMenu
               x={editorMenu.x}
               y={editorMenu.y}
-              items={editorMenuItems()}
+              items={editorMenuItems(editorMenu.view)}
               onClose={closeEditorMenu}
             />
           )}
@@ -549,6 +592,7 @@ function App() {
               rootPath={rootPath}
               onOpenFolder={openFolder}
               onFileSelect={selectFile}
+              onOpenToSide={(path) => void openToSide(path)}
               onOpenAt={(path, line, column) => void openAt(path, line, column)}
               currentFile={currentFile}
               onCreateFile={createFile}
@@ -590,14 +634,14 @@ function App() {
         openPaths={openPaths}
         recentPaths={recentFiles}
         currentFile={currentFile}
-        onSelect={selectFile}
+        onSelect={(path, beside) => void (beside ? openToSide(path) : selectFile(path))}
       />
 
       <FileSearchPalette
         isOpen={isLinkPickerOpen}
         onClose={() => {
           setIsLinkPickerOpen(false);
-          editorView?.focus();
+          (linkView ?? editorView)?.focus();
         }}
         data={folderData}
         openPaths={openPaths}
