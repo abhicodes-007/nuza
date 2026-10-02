@@ -576,7 +576,51 @@ textarea,
   }
 }
 
+/* An image from a note, shown large over the window. It fades and settles in
+   and out the same way, and a click or Escape puts it away. */
+.nuza-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vmin;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.nuza-lightbox-open {
+  opacity: 1;
+}
+
+.nuza-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 0.5rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  transform: scale(0.97);
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nuza-lightbox-open img {
+  transform: none;
+}
+
+.nuza-lightbox-broken {
+  color: var(--nuza-muted);
+  font-style: italic;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .nuza-lightbox,
+  .nuza-lightbox img {
+    transition: none;
+  }
+
   .cm-md-flash {
     animation: none;
     background-color: var(--nuza-accent-wash);

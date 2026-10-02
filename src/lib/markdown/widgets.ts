@@ -5,6 +5,7 @@ import { areaField, refresh, textField } from "./fields";
 import { Property, frontmatterRange, readFrontmatter } from "./frontmatter";
 import { DEFAULT_EDITOR_FONT_SIZE } from "../fonts";
 import { renderHtml } from "./sanitize";
+import { showLightbox } from "./lightbox";
 import { safeExternalHref } from "./sources";
 import { showPopupMenu } from "./popupMenu";
 import {
@@ -257,6 +258,53 @@ export class ImageWidget extends WidgetType {
     wrapper.appendChild(image);
     if (image.complete) reveal();
     return wrapper;
+  }
+}
+
+/**
+ * A small picture after a link to an image in the vault, which opens it large
+ * when clicked. The link's own text is left as it is: this sits beside it, so
+ * the note still reads the way it was written.
+ */
+export class LinkThumbnailWidget extends WidgetType {
+  constructor(
+    readonly src: string,
+    readonly alt: string
+  ) {
+    super();
+  }
+
+  eq(other: LinkThumbnailWidget) {
+    return other.src === this.src && other.alt === this.alt;
+  }
+
+  toDOM() {
+    const wrapper = document.createElement("span");
+    wrapper.className = "cm-md-link-thumb";
+    wrapper.title = this.alt ? `Preview ${this.alt}` : "Preview";
+
+    const image = document.createElement("img");
+    image.src = this.src;
+    image.alt = this.alt;
+    image.loading = "lazy";
+
+    const reveal = () => wrapper.classList.add("cm-md-link-thumb-loaded");
+    image.addEventListener("load", reveal);
+    // A picture that is not there is not worth a hole in the line.
+    image.addEventListener("error", () => wrapper.remove());
+    if (image.complete) reveal();
+
+    wrapper.appendChild(image);
+    wrapper.addEventListener("click", (event) => {
+      event.preventDefault();
+      showLightbox(this.src, this.alt);
+    });
+    return wrapper;
+  }
+
+  /** The click is the thumbnail's: it must not also put the caret in the line. */
+  ignoreEvent() {
+    return true;
   }
 }
 

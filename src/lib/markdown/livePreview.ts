@@ -4,12 +4,13 @@ import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import { FrontmatterRange, frontmatterRange, readFrontmatter } from "./frontmatter";
 import { rendersHtml } from "./sanitize";
-import { noteDirectory, resolveImageSource, safeExternalHref } from "./sources";
+import { isLocalImageTarget, noteDirectory, resolveImageSource, safeExternalHref } from "./sources";
 import { readWikiLink } from "./wikiLinks";
 import {
   BulletWidget,
   HtmlWidget,
   ImageWidget,
+  LinkThumbnailWidget,
   PropertiesWidget,
   RuleWidget,
   TableAlignment,
@@ -481,6 +482,18 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
         attributes: href ? { "data-href": href } : anchor ? { "data-anchor": anchor } : undefined,
       }).range(from, to)
     );
+
+    // A link to a picture in the vault gets a small one beside it, unless the
+    // caret is in the link: then it is the markdown that is being edited.
+    const source =
+      urlNode && !isBeingEdited(state, from, to) && isLocalImageTarget(target)
+        ? resolveImageSource(target, directory)
+        : null;
+    if (source) {
+      const [open, close] = [...node.node.getChildren("LinkMark")];
+      const label = open && close ? doc.sliceString(open.to, close.from) : "";
+      out.push(Decoration.widget({ widget: new LinkThumbnailWidget(source, label), side: 1 }).range(to));
+    }
     return;
   }
 

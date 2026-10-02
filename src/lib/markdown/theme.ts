@@ -469,6 +469,27 @@ const editorTheme = EditorView.theme(
       transition: "opacity 220ms ease",
     },
     ".cm-md-image-loaded img": { opacity: "1" },
+
+    /* The small picture after a link to an image: a line tall and a bit more,
+       set on the text's own baseline so it does not push the line apart. */
+    ".cm-md-link-thumb": {
+      display: "inline-block",
+      marginLeft: "0.4em",
+      verticalAlign: "middle",
+      cursor: "zoom-in",
+    },
+    ".cm-md-link-thumb img": {
+      display: "block",
+      height: "1.7em",
+      maxWidth: "4.5em",
+      objectFit: "cover",
+      borderRadius: "0.3em",
+      boxShadow: `0 0 0 1px ${ink.hairline}`,
+      opacity: "0",
+      transition: "opacity 200ms ease, transform 140ms ease",
+    },
+    ".cm-md-link-thumb-loaded img": { opacity: "1" },
+    ".cm-md-link-thumb:hover img": { transform: "scale(1.06)" },
     ".cm-md-image-broken": {
       color: ink.muted,
       fontStyle: "italic",

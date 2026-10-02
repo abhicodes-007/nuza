@@ -67,6 +67,19 @@ export function safeExternalHref(url: string) {
   return null;
 }
 
+const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
+
+/**
+ * Whether a link's target is an image in the vault - a path, not a web
+ * address - which is what earns it a thumbnail beside the link's text. Any
+ * `?query` or `#fragment` on the end is not part of the file's name.
+ */
+export function isLocalImageTarget(url: string) {
+  const trimmed = url.trim();
+  const path = trimmed.split(/[?#]/)[0];
+  return !!path && !HAS_SCHEME.test(trimmed) && IMAGE_EXTENSION.test(path);
+}
+
 /**
  * The `src` to render for an image: web and data URLs pass through, a path
  * relative to the note is handed to Tauri's asset protocol, and anything with
