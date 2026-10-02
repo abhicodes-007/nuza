@@ -22,6 +22,7 @@ import { useVaults } from "./hooks/useVaults";
 import { useAppearance } from "./hooks/useAppearance";
 import { useAppUpdater } from "./hooks/useAppUpdater";
 import { usePersistedState } from "./hooks/usePersistedState";
+import { useRecentFiles } from "./hooks/useRecentFiles";
 import { useResizableSidebar } from "./hooks/useResizableSidebar";
 import { report } from "./lib/notices";
 import { addFrontmatter, addProperty, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
@@ -158,6 +159,13 @@ function App() {
   } = useKeymaps();
   const { width: sidebarWidth, isResizing, startResize, resetWidth } = useResizableSidebar();
   const { notices, dismiss: dismissNotice, hold: noticeHold } = useNotices();
+  const { recent: recentFiles, record: recordRecentFile } = useRecentFiles();
+
+  // Whatever comes to the front is what was most recently worked in. The
+  // scratch note has no path, and is not a file to come back to.
+  useEffect(() => {
+    if (currentFile) recordRecentFile(currentFile);
+  }, [currentFile, recordRecentFile]);
 
   // Picking up where you left off: the vault most recently opened is reopened
   // on launch, so the app starts in a folder rather than on an empty picker.
@@ -561,6 +569,7 @@ function App() {
         onClose={closeQuickOpen}
         data={folderData}
         openPaths={openPaths}
+        recentPaths={recentFiles}
         currentFile={currentFile}
         onSelect={selectFile}
       />
@@ -573,6 +582,7 @@ function App() {
         }}
         data={folderData}
         openPaths={openPaths}
+        recentPaths={recentFiles}
         currentFile={currentFile}
         onSelect={linkToNote}
         placeholder="Link to a note"
