@@ -3,6 +3,7 @@ import { EditorView, WidgetType } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import { areaField, refresh, textField } from "./fields";
 import { Property, frontmatterRange, readFrontmatter } from "./frontmatter";
+import { DEFAULT_EDITOR_FONT_SIZE } from "../fonts";
 import { renderHtml } from "./sanitize";
 import { safeExternalHref } from "./sources";
 import { showPopupMenu } from "./popupMenu";
@@ -276,6 +277,31 @@ export type TableRow = {
   header: boolean;
 };
 
+/**
+ * How tall a rendered table is likely to be, in pixels, worked out from the
+ * metrics in `.cm-md-table` (theme.ts) rather than measured.
+ *
+ * The editor places everything below a table by the height it believes the
+ * table has, and only learns the real one once the table has been drawn in
+ * the viewport. Left to guess, it sizes the block by the lines of source it
+ * replaces - which is one row out, ignores the cell padding and the "add row"
+ * button under the table, and is wrong by more with every row. A guess close
+ * enough to the real height is what keeps the page from jumping when the
+ * table above the viewport is measured. Cells whose text wraps make the real
+ * table taller than this; that is the remaining jump, and it is the smaller.
+ */
+export function estimateTableHeight(rowCount: number, fontSize = DEFAULT_EDITOR_FONT_SIZE) {
+  // The table's own font is 0.94em, so its line and its cell padding are too.
+  const row = 0.94 * (1.5 + 2 * 0.4);
+  // Top and bottom padding of the wrapper.
+  const wrapper = 2 * 0.5;
+  // The add-row button: 0.85em type at the editor's 1.75 line height, its own
+  // vertical padding, and the margin above it.
+  const add = 0.85 * (1.75 + 2 * 0.16 + 0.35);
+  // The collapsed borders are a pixel a row, and one more under the last.
+  return Math.round((wrapper + add + row * rowCount) * fontSize + rowCount + 1);
+}
+
 /** A GFM table drawn as an actual table, with cells that are click-to-edit. */
 export class TableWidget extends WidgetType {
   constructor(
@@ -289,6 +315,10 @@ export class TableWidget extends WidgetType {
 
   eq(other: TableWidget) {
     return other.key === this.key;
+  }
+
+  get estimatedHeight() {
+    return estimateTableHeight(this.rows.length);
   }
 
   /** Where a cell's source sits right now, read back through the widget's own DOM. */
