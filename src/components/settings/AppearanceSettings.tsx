@@ -11,12 +11,15 @@ import {
 import { Appearance, THEME_CHOICES, clampTransparency } from "@/lib/appearance";
 import ColorField from "./ColorField";
 import FontPicker from "./FontPicker";
+import { Switch } from "@/components/ui/switch";
 import SettingRow from "./SettingRow";
 
 interface AppearanceSettingsProps {
   appearance: Appearance;
   setAppearance: (change: Partial<Appearance>) => void;
   resetAppearance: () => void;
+  compactMode: boolean;
+  setCompactMode: (enabled: boolean) => void;
   editorFont: string;
   setEditorFont: (font: string) => void;
   editorFontSize: number;
@@ -27,6 +30,8 @@ export default function AppearanceSettings({
   appearance,
   setAppearance,
   resetAppearance,
+  compactMode,
+  setCompactMode,
   editorFont,
   setEditorFont,
   editorFontSize,
@@ -120,6 +125,10 @@ export default function AppearanceSettings({
         >
           Reset
         </button>
+      </SettingRow>
+
+      <SettingRow title="Compact Mode" description="Tighter rows in the sidebar, tabs and status bars">
+        <Switch checked={compactMode} onCheckedChange={setCompactMode} />
       </SettingRow>
 
       <SettingRow title="Font" description="Any font installed on your system">

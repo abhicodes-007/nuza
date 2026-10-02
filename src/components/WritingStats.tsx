@@ -19,7 +19,7 @@ function WritingStats({ subscribeToStats }: { subscribeToStats: StatsSubscriptio
   ] as const;
 
   return (
-    <div className="animate-fade-in relative z-10 flex h-7 shrink-0 items-center justify-end gap-5 px-5 text-xs text-zinc-500">
+    <div className="animate-fade-in relative z-10 flex h-7 compact:h-6 shrink-0 items-center justify-end gap-5 px-5 text-xs text-zinc-500">
       {counts.map(([value, noun]) => (
         <span key={noun} className="tabular-nums">
           {value.toLocaleString()} {noun}

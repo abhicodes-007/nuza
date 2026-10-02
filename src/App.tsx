@@ -52,6 +52,7 @@ function App() {
   // taking app should assume about whoever just opened it.
   const [vimEnabled, setVimEnabled] = usePersistedState("vimEnabled", false);
   const [showLineNumbers, setShowLineNumbers] = usePersistedState("showLineNumbers", false);
+  const [compactMode, setCompactMode] = usePersistedState("compactMode", false);
   const [autoUpdateEnabled, setAutoUpdateEnabled] = usePersistedState("autoUpdateEnabled", true);
   const [editorFont, setEditorFont] = usePersistedState("editorFont", DEFAULT_EDITOR_FONT);
   const [editorFontSize, setEditorFontSize] = usePersistedState("editorFontSize", DEFAULT_EDITOR_FONT_SIZE);
@@ -62,6 +63,13 @@ function App() {
   // the way up on the platforms that do have a backdrop.
   const [hasBackdrop, setHasBackdrop] = useState(true);
   const { appearance, update: setAppearance, reset: resetAppearance } = useAppearance(hasBackdrop);
+
+  // Read by the `compact:` variant in App.css, so flipping it retightens the
+  // sidebar and chrome without a single component re-rendering.
+  useEffect(() => {
+    if (compactMode) document.documentElement.dataset.compact = "";
+    else delete document.documentElement.dataset.compact;
+  }, [compactMode]);
 
   const sidebarRef = useRef<SidebarHandle>(null);
 
@@ -595,6 +603,8 @@ function App() {
         appearance={appearance}
         setAppearance={setAppearance}
         resetAppearance={resetAppearance}
+        compactMode={compactMode}
+        setCompactMode={setCompactMode}
         autoUpdateEnabled={autoUpdateEnabled}
         setAutoUpdateEnabled={setAutoUpdateEnabled}
         editorFont={editorFont}

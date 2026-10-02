@@ -14,6 +14,14 @@
 @import "tailwindcss";
 
 /*
+ * `compact:` applies a utility only while compact mode is on, which is a
+ * `data-compact` attribute on the root (see App.tsx). It is a variant rather
+ * than a pile of overrides here so the tighter value sits next to the roomy
+ * one it replaces, in the component it belongs to.
+ */
+@custom-variant compact (:root[data-compact] &);
+
+/*
  * The defaults, so the window is painted before any JavaScript has run. From
  * then on these are overwritten on the root element by the appearance hook.
  */
