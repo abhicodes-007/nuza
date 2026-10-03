@@ -1,9 +1,8 @@
-use crate::state::{locked, Vault};
+use crate::state::{locked, vault_of};
 use crate::tasks::{off_thread, wait_for_picker};
 use crate::tree::{read_dir_recursive, FileEntry};
 use crate::watcher::watch_vault;
 use std::path::Path;
-use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
 #[derive(serde::Serialize)]
@@ -17,8 +16,8 @@ pub(crate) struct OpenedFolder {
 /// note are served over that protocol, which is handed this folder and nothing
 /// else - a note is text from disk that anything could have written, and it has
 /// no business reaching the rest of it.
-pub(crate) fn adopt_folder(
-    app_handle: &tauri::AppHandle,
+pub(crate) fn adopt_folder<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
     path: String,
 ) -> Result<OpenedFolder, String> {
     let directory = Path::new(&path);
@@ -30,7 +29,7 @@ pub(crate) fn adopt_folder(
     // check is a comparison between two paths the OS has already agreed on.
     let resolved = directory.canonicalize().map_err(|e| e.to_string())?;
     {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(window);
         *locked(&vault.root) = Some(resolved.clone());
         // The notes of the folder being left are no longer anything to be out
         // of date with.
@@ -39,7 +38,7 @@ pub(crate) fn adopt_folder(
 
     // A folder that cannot be watched is still a folder worth opening; what is
     // lost is the notice, not the vault.
-    if let Err(error) = watch_vault(app_handle, &resolved) {
+    if let Err(error) = watch_vault(window, &resolved) {
         eprintln!("nuza: not watching \"{}\" for changes: {}", path, error);
     }
 
@@ -51,11 +50,11 @@ pub(crate) fn adopt_folder(
 /// contents as a tree, read recursively. Returns `None` if the user cancels.
 #[tauri::command]
 pub(crate) async fn load_folder_picker(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
 ) -> Result<Option<OpenedFolder>, String> {
-    let scope = app_handle.clone();
+    let scope = window.clone();
     wait_for_picker(|send| {
-        app_handle.dialog().file().pick_folder(move |folder_path| {
+        window.dialog().file().pick_folder(move |folder_path| {
             let result = match folder_path {
                 Some(path) => adopt_folder(&scope, path.to_string()).map(Some),
                 None => Ok(None),
@@ -69,8 +68,8 @@ pub(crate) async fn load_folder_picker(
 /// Reopens a folder the app already knows about, without asking for it again.
 #[tauri::command]
 pub(crate) async fn open_folder(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     path: String,
 ) -> Result<OpenedFolder, String> {
-    off_thread(move || adopt_folder(&app_handle, path)).await
+    off_thread(move || adopt_folder(&window, path)).await
 }

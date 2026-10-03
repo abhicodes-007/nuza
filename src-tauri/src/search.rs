@@ -1,10 +1,9 @@
-use crate::state::{locked, Vault};
+use crate::state::{locked, vault_of};
 use crate::tasks::off_thread;
 use crate::tree::{read_dir_recursive, FileEntry};
 use crate::wiki::scan_vault;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::Manager;
 
 /// A line of a note that holds what was searched for.
 #[derive(serde::Serialize, Debug, PartialEq)]
@@ -159,10 +158,10 @@ pub(crate) fn search_vault(root: &Path, query: &str) -> Result<Vec<ContentHit>, 
 /// Every `#tag` written in the open vault, for the sidebar's list of them.
 #[tauri::command]
 pub(crate) async fn list_tags(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
 ) -> Result<Vec<crate::tags::TagRef>, String> {
     off_thread(move || {
-        let root = locked(&app_handle.state::<Vault>().root).clone();
+        let root = locked(&vault_of(&window).root).clone();
         match root {
             Some(root) => scan_vault(&root, crate::tags::tags_in),
             None => Ok(Vec::new()),
@@ -174,11 +173,11 @@ pub(crate) async fn list_tags(
 /// The lines of the open vault's notes that contain `query`, ignoring case.
 #[tauri::command]
 pub(crate) async fn search_contents(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     query: String,
 ) -> Result<Vec<ContentHit>, String> {
     off_thread(move || {
-        let root = locked(&app_handle.state::<Vault>().root).clone();
+        let root = locked(&vault_of(&window).root).clone();
         let Some(root) = root else {
             return Ok(Vec::new());
         };

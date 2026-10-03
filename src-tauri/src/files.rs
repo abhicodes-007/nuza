@@ -1,21 +1,20 @@
 use crate::state::{
-    changed_since_read, locked, remember, within_vault, within_vault_to_create,
+    changed_since_read, locked, remember, vault_of, within_vault, within_vault_to_create,
     within_vault_to_write, Vault, CHANGED_ON_DISK,
 };
 use crate::tasks::{off_thread, wait_for_picker};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
 pub(crate) async fn create_file(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     parent_path: String,
     name: String,
 ) -> Result<(), String> {
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
         let name = exact_file_name(&name)?;
         let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
 
@@ -38,12 +37,12 @@ pub(crate) async fn create_file(
 
 #[tauri::command]
 pub(crate) async fn create_folder(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     parent_path: String,
     name: String,
 ) -> Result<(), String> {
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
         let name = exact_file_name(&name)?;
         let path = within_vault_to_create(&vault, &Path::new(&parent_path).join(&name))?;
 
@@ -61,12 +60,12 @@ pub(crate) async fn create_folder(
 /// directory. Returns the new full path.
 #[tauri::command]
 pub(crate) async fn rename_entry(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     path: String,
     new_name: String,
 ) -> Result<String, String> {
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
         let new_name = exact_file_name(&new_name)?;
         let old = within_vault(&vault, Path::new(&path))?;
         let parent = old
@@ -87,12 +86,12 @@ pub(crate) async fn rename_entry(
 /// keeping its name. Returns the new full path.
 #[tauri::command]
 pub(crate) async fn move_entry(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     path: String,
     target_dir: String,
 ) -> Result<String, String> {
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
         let (old, new_path) = move_destination(&vault, &path, &target_dir)?;
         let name = new_path.file_name().unwrap_or_default().to_string_lossy();
 
@@ -149,9 +148,9 @@ pub(crate) fn move_destination(
 }
 
 #[tauri::command]
-pub(crate) async fn delete_entry(app_handle: tauri::AppHandle, path: String) -> Result<(), String> {
+pub(crate) async fn delete_entry(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
         let p = within_vault(&vault, Path::new(&path))?;
 
         // To the Trash, not out of existence. `remove_dir_all` on a folder
@@ -168,12 +167,12 @@ pub(crate) async fn delete_entry(app_handle: tauri::AppHandle, path: String) -> 
 /// Returns the chosen path, or `None` if the user cancels the dialog.
 #[tauri::command]
 pub(crate) async fn save_file_picker(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     content: String,
 ) -> Result<Option<String>, String> {
-    let chosen = app_handle.clone();
+    let chosen = window.clone();
     wait_for_picker(|send| {
-        app_handle
+        window
             .dialog()
             .file()
             .add_filter("Markdown Files", &["md", "markdown"])
@@ -189,7 +188,7 @@ pub(crate) async fn save_file_picker(
                                 // that the autosave that follows is allowed to
                                 // keep writing the note they just saved.
                                 if let Ok(resolved) = Path::new(&path_str).canonicalize() {
-                                    locked(&chosen.state::<Vault>().chosen).insert(resolved);
+                                    locked(&vault_of(&chosen).chosen).insert(resolved);
                                 }
                                 Ok(Some(path_str))
                             }
@@ -522,11 +521,11 @@ pub(crate) fn preferred_directory(directory: &Path) -> std::path::PathBuf {
 /// it takes the original's permissions. Folders are not duplicated.
 #[tauri::command]
 pub(crate) async fn duplicate_entry(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     path: String,
 ) -> Result<String, String> {
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
         let source = within_vault(&vault, Path::new(&path))?;
         duplicate_file(&source).map(|copy| copy.to_string_lossy().into_owned())
     })
@@ -565,11 +564,11 @@ pub(crate) fn duplicate_file(source: &Path) -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub(crate) async fn read_file(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     path: String,
 ) -> Result<String, String> {
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
         let path = within_vault(&vault, Path::new(&path))?;
         let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
         // Where the note stood when it was read, so a later write can tell
@@ -633,13 +632,13 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> 
 /// being asked which copy they want to keep.
 #[tauri::command]
 pub(crate) async fn write_file(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     path: String,
     content: String,
     force: Option<bool>,
 ) -> Result<(), String> {
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
         let path = within_vault_to_write(&vault, Path::new(&path))?;
 
         if !force.unwrap_or(false) && changed_since_read(&vault, &path) {

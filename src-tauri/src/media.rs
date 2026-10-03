@@ -1,5 +1,5 @@
 use crate::files::{create_unused, preferred_directory, safe_file_name};
-use crate::state::{within_vault, within_vault_to_write, Vault};
+use crate::state::{vault_of, within_vault, within_vault_to_write, Windows};
 use crate::tasks::off_thread;
 use std::fs;
 use std::path::Path;
@@ -81,6 +81,7 @@ pub(crate) fn media_body(
 /// Answers one request for a note's media, or says why it will not.
 pub(crate) fn serve_media(
     app_handle: &tauri::AppHandle,
+    label: &str,
     request: &tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
     use std::io::Read;
@@ -90,7 +91,7 @@ pub(crate) fn serve_media(
     // The whole point of the scheme. A path that does not resolve inside the
     // folder that is open is not this app's to serve, whether it belongs to a
     // vault that was open earlier or to somewhere that never was.
-    let vault = app_handle.state::<Vault>();
+    let vault = app_handle.state::<Windows>().vault(label);
     let Ok(path) = within_vault(&vault, Path::new(&asked_for)) else {
         return media_status(403);
     };
@@ -178,7 +179,7 @@ pub(crate) fn body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, Strin
 /// avoid overwriting something.
 #[tauri::command]
 pub(crate) async fn write_media(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     request: tauri::ipc::Request<'_>,
 ) -> Result<String, String> {
     let directory = header_text(request.headers(), "x-nuza-directory")?;
@@ -186,7 +187,7 @@ pub(crate) async fn write_media(
     let bytes = body_bytes(request.body())?;
 
     off_thread(move || {
-        let vault = app_handle.state::<Vault>();
+        let vault = vault_of(&window);
 
         let directory = preferred_directory(Path::new(&directory));
         let directory = within_vault_to_write(&vault, &directory)?;
