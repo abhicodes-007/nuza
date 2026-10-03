@@ -203,6 +203,64 @@ export class HtmlWidget extends WidgetType {
   }
 }
 
+/**
+ * KaTeX is the largest thing the editor can ask for, and most notes have no
+ * math in them, so it is fetched the first time a note shows some.
+ */
+let katex: Promise<typeof import("katex").default> | null = null;
+
+function loadKatex() {
+  katex ??= import("katex").then((module) => module.default);
+  return katex;
+}
+
+/**
+ * TeX drawn as the math it stands for. Rendered as MathML, which the webviews
+ * nuza runs in all draw themselves: that needs none of KaTeX's stylesheet or
+ * fonts, so the app does not grow by a megabyte of typefaces for it.
+ */
+export class MathWidget extends WidgetType {
+  constructor(
+    readonly tex: string,
+    readonly block: boolean
+  ) {
+    super();
+  }
+
+  eq(other: MathWidget) {
+    return other.tex === this.tex && other.block === this.block;
+  }
+
+  toDOM(view: EditorView) {
+    const wrapper = document.createElement(this.block ? "div" : "span");
+    wrapper.className = this.block ? "cm-md-math cm-md-math-block" : "cm-md-math";
+    // The source stands in for the few milliseconds the first render takes.
+    wrapper.textContent = this.tex;
+
+    loadKatex().then(
+      (renderer) => {
+        wrapper.textContent = "";
+        renderer.render(this.tex, wrapper, {
+          displayMode: this.block,
+          output: "mathml",
+          throwOnError: false,
+        });
+        // A block changes height when it is drawn; the editor has to hear it.
+        view.requestMeasure();
+      },
+      () => {
+        // The chunk did not load: the source it already shows is the fallback.
+      }
+    );
+    return wrapper;
+  }
+
+  /** Clicking rendered math should put the caret in the TeX behind it. */
+  ignoreEvent() {
+    return false;
+  }
+}
+
 /** `***` / `---` drawn as the rule it stands for. */
 export class RuleWidget extends WidgetType {
   eq() {
