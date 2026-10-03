@@ -100,7 +100,7 @@ Today both `onCloseRequested` and the quit item end in `exit(0)`. Split them:
 Each window is its own webview with its own JS context and React tree, so module-level state (`documentCache`, `closedTabs`, recent files, the open tabs) is per window with no work. The shared thing is `localStorage`:
 
 - **Settings** (`usePersistedState`) are read once at mount. Add a `storage` event listener so a change in one window (Vim mode, font, theme) applies live in the others. `storage` events fire only in the other windows, which is what is wanted.
-- **Sessions** (`session.ts`) keep one JSON object for every vault, behind an in-memory `cache` that assumes this module is the only writer. With two windows each cache goes stale and the second write erases the first's vault. Fix: re-read storage before each write and replace only that vault's entry.
+- **Sessions** (`session.ts`) keep one JSON object for every vault, behind an in-memory `cache` that assumes this module is the only one writing. With two windows each cache goes stale and the second write erases the first's vault. Fix: re-read storage before each write and replace only that vault's entry.
 - **Vault list** (`useVaults`): same read-modify-write fix.
 - **Scratch note** (`nuza:scratch`) is a single buffer. Open question below.
 - **Window restore:** at quit, write the list of open vault roots (plus window frames) to one key. On cold start `main` takes the first and the rest are opened with `open_window`. Per-vault tabs already restore from the session store.
@@ -128,7 +128,7 @@ Each step is its own PR, and each leaves the app working with one window.
 
 ## Open questions
 
-- **Scratch note.** Keep it shared (last writer wins), key it by window, or give it to `main` only? Leaning: `main` only, other windows start empty.
+- **Scratch note.** Keep it shared (last write wins), key it by window, or give it to `main` only? Leaning: `main` only, other windows start empty.
 - **Close behaviour on macOS** with zero windows: quit, or stay in the dock as today? Needs checking against the current behaviour before step 3.
 - **Duplicate-vault policy.** Focus-existing is simple; some people want one vault in two windows to compare notes. Split view (a second note beside the first) already covers that.
 - **Watcher cost.** One watcher per window is simplest; if many windows open the same large vault it could be shared behind a refcount. Not worth building until it is seen to matter.
