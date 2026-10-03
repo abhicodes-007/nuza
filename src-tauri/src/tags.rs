@@ -17,7 +17,7 @@
 //! follows a blank line, which is the rule for one outside a list. Inside a
 //! list the editor knows better and this does not.
 
-use super::PREVIEW_LENGTH;
+use crate::search::PREVIEW_LENGTH;
 
 /// How far down a note its frontmatter's closing fence is looked for, the
 /// same limit the editor uses.
