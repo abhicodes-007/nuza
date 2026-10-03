@@ -49,11 +49,13 @@ pub fn run() {
             media::MEDIA_PROTOCOL,
             |context, request, responder| {
                 let app_handle = context.app_handle().clone();
+                // Which window asked decides which folder the file may come from.
+                let label = context.webview_label().to_string();
                 // Off the main thread for the same reason the commands are:
                 // this reads a file, and a video asks for a great many of
                 // these while the window is trying to draw.
                 tauri::async_runtime::spawn_blocking(move || {
-                    responder.respond(media::serve_media(&app_handle, &request));
+                    responder.respond(media::serve_media(&app_handle, &label, &request));
                 });
             },
         )
@@ -63,7 +65,7 @@ pub fn run() {
         .setup(|app| {
             // Empty until a folder is opened, which is also what makes every
             // filesystem command refuse until then.
-            app.manage(state::Vault::default());
+            app.manage(state::Windows::default());
 
             // What `nuza <path>` started this run on, if it did. Read here, not
             // by the window, so it does not depend on who asks first.
@@ -81,6 +83,12 @@ pub fn run() {
                 }
             }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // The window's folder goes with it, and its watcher with that.
+            if let tauri::WindowEvent::Destroyed = event {
+                window.state::<state::Windows>().remove(window.label());
+            }
         })
         .plugin(tauri_plugin_opener::init());
 

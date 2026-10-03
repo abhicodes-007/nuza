@@ -1,6 +1,6 @@
 # Multi-window design
 
-Tracks [#148](https://github.com/puang59/nuza/issues/148). Status: design, nothing built yet.
+Tracks [#148](https://github.com/puang59/nuza/issues/148). Status: step 1 of the rollout (a vault per window) is built; the rest is design.
 
 ## What it is for
 
@@ -113,7 +113,7 @@ The macOS menu is app-wide, so `Window` menu entries listing open windows, and `
 
 Each step is its own PR, and each leaves the app working with one window.
 
-1. **Per-window vault (Rust only).** `Windows` map, commands take the calling window, `emit_to`, media label lookup, `Destroyed` cleanup. One window exists, so nothing is visible. Unit tests for the map, and for two vaults not seeing each other's paths or events.
+1. **Per-window vault (Rust only). Done.** `Windows` map, commands take the calling window, `emit_to`, media label lookup, `Destroyed` cleanup. One window exists, so nothing is visible. Unit tests for the map, and for two vaults not seeing each other's paths or events.
 2. **Open a window.** `open_window`, capability glob, per-label launch targets, `New Window` command and shortcut, window set-up on every window, focus-existing resolver, single-instance routing.
 3. **Close and quit.** Per-window close, quit coordination with acks, per-window `close-tab`.
 4. **Frontend sharing.** `storage` listener for settings, session and vault list read-modify-write, scratch decision.

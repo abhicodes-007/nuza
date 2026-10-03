@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
+use tauri::Manager;
 
 /// What the app is allowed to touch: the folder that is open, and whatever the
 /// user has pointed at directly through a save dialog.
@@ -30,6 +31,36 @@ pub(crate) struct Vault {
     /// how notify stops watching, so replacing this is how switching vaults
     /// stops listening to the old one.
     pub(crate) watcher: Mutex<Option<notify::RecommendedWatcher>>,
+}
+
+/// Every window's vault, by the window's label.
+///
+/// A vault is the state of one open folder, so each window gets its own: two
+/// windows on two folders must not be able to see, or re-root, each other's.
+/// An entry is made the first time a window asks, and starts out with nothing
+/// open - which is what makes every filesystem command refuse until that
+/// window has opened a folder of its own.
+#[derive(Default)]
+pub(crate) struct Windows(Mutex<HashMap<String, Arc<Vault>>>);
+
+impl Windows {
+    /// The vault of the window called `label`, made if it has none yet.
+    pub(crate) fn vault(&self, label: &str) -> Arc<Vault> {
+        locked(&self.0)
+            .entry(label.to_string())
+            .or_default()
+            .clone()
+    }
+
+    /// Forgets a window that has closed, which drops its watcher with it.
+    pub(crate) fn remove(&self, label: &str) {
+        locked(&self.0).remove(label);
+    }
+}
+
+/// The vault of the window a command was called from.
+pub(crate) fn vault_of<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Arc<Vault> {
+    window.state::<Windows>().vault(window.label())
 }
 
 /// What `write_file` says when the note it was asked to write has moved on

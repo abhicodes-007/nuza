@@ -8,7 +8,7 @@ use crate::recovery::{recovery_file, Recovery};
 use crate::search::{fold, search_text, search_vault, ContentHit};
 use crate::state::{
     changed_since_read, locked, remember, within_vault, within_vault_to_create,
-    within_vault_to_write, Vault,
+    within_vault_to_write, Vault, Windows,
 };
 use crate::tree::{read_dir_recursive, FileEntry, MAX_TREE_DEPTH};
 use crate::wiki::{scan_vault, vault_wiki_links, wiki_links_in};
@@ -123,6 +123,105 @@ fn refuses_everything_with_no_vault_open() {
     fs::write(&note, "hello").unwrap();
 
     assert!(within_vault(&Vault::default(), &note).is_err());
+}
+
+/// Two windows on two folders are two vaults: a note in one's folder is
+/// nothing to the other, and opening a folder in one does not move the other.
+#[test]
+fn windows_keep_their_own_folder() {
+    let first_dir = tempfile::tempdir().unwrap();
+    let second_dir = tempfile::tempdir().unwrap();
+    let first_note = first_dir.path().join("note.md");
+    let second_note = second_dir.path().join("note.md");
+    fs::write(&first_note, "one").unwrap();
+    fs::write(&second_note, "two").unwrap();
+
+    let windows = Windows::default();
+    *locked(&windows.vault("main").root) = Some(first_dir.path().canonicalize().unwrap());
+    *locked(&windows.vault("w-1").root) = Some(second_dir.path().canonicalize().unwrap());
+
+    assert!(within_vault(&windows.vault("main"), &first_note).is_ok());
+    assert!(within_vault(&windows.vault("main"), &second_note).is_err());
+    assert!(within_vault(&windows.vault("w-1"), &second_note).is_ok());
+    assert!(within_vault(&windows.vault("w-1"), &first_note).is_err());
+}
+
+/// A window nobody has opened a folder in refuses everything, whatever the
+/// other windows have open.
+#[test]
+fn a_new_window_starts_with_nothing_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let note = dir.path().join("note.md");
+    fs::write(&note, "hello").unwrap();
+
+    let windows = Windows::default();
+    *locked(&windows.vault("main").root) = Some(dir.path().canonicalize().unwrap());
+
+    assert!(within_vault(&windows.vault("w-new"), &note).is_err());
+}
+
+/// Asking twice for the same window is the same vault, so what one command
+/// records is what the next one sees.
+#[test]
+fn a_window_gets_the_same_vault_each_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let note = dir.path().join("note.md");
+    fs::write(&note, "hello").unwrap();
+
+    let windows = Windows::default();
+    remember(&windows.vault("main"), &note);
+    fs::write(&note, "changed, and longer").unwrap();
+    // Some filesystems keep a second's resolution; make the move unmistakable.
+    let later = SystemTime::now() + std::time::Duration::from_secs(5);
+    fs::File::options()
+        .write(true)
+        .open(&note)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+
+    assert!(changed_since_read(&windows.vault("main"), &note));
+    assert!(!changed_since_read(&windows.vault("w-1"), &note));
+}
+
+/// A note one window has read is not one another has: each notices a change
+/// to it for itself.
+#[test]
+fn windows_track_what_they_have_read_separately() {
+    let dir = tempfile::tempdir().unwrap();
+    let note = dir.path().join("note.md");
+    fs::write(&note, "hello").unwrap();
+
+    let windows = Windows::default();
+    remember(&windows.vault("main"), &note);
+    remember(&windows.vault("w-1"), &note);
+    let later = SystemTime::now() + std::time::Duration::from_secs(5);
+    fs::File::options()
+        .write(true)
+        .open(&note)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    // `w-1` reads the new version; `main` still holds the old one.
+    remember(&windows.vault("w-1"), &note);
+
+    assert!(changed_since_read(&windows.vault("main"), &note));
+    assert!(!changed_since_read(&windows.vault("w-1"), &note));
+}
+
+/// Closing a window lets go of its vault, and a window of the same name
+/// afterwards starts clean.
+#[test]
+fn closing_a_window_forgets_its_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let windows = Windows::default();
+    *locked(&windows.vault("w-1").root) = Some(dir.path().canonicalize().unwrap());
+
+    let watching = std::sync::Arc::downgrade(&windows.vault("w-1"));
+    windows.remove("w-1");
+
+    assert!(watching.upgrade().is_none());
+    assert!(locked(&windows.vault("w-1").root).is_none());
 }
 
 /// The reason paths are resolved rather than compared as text.
@@ -941,4 +1040,94 @@ fn lists_the_tags_in_the_notes_a_vault_shows() {
         [("alpha", 1), ("beta", 2)]
     );
     assert!(tags[0].from.ends_with("a.md"));
+}
+
+/// Two real windows, with no screen behind them: the label a command is called
+/// from is what picks the vault.
+mod windows {
+    use super::*;
+    use crate::folder::adopt_folder;
+    use crate::launch::FILE_CHANGED_EVENT;
+    use crate::state::vault_of;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
+    use tauri::{Listener, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+
+    fn two_windows() -> (
+        tauri::App<MockRuntime>,
+        WebviewWindow<MockRuntime>,
+        WebviewWindow<MockRuntime>,
+    ) {
+        let app = mock_builder()
+            .manage(Windows::default())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let first = WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
+            .build()
+            .unwrap();
+        let second = WebviewWindowBuilder::new(&app, "w-1", WebviewUrl::default())
+            .build()
+            .unwrap();
+        (app, first, second)
+    }
+
+    #[test]
+    fn opening_a_folder_in_one_window_leaves_the_other_alone() {
+        let (_app, first, second) = two_windows();
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let first_note = first_dir.path().join("note.md");
+        let second_note = second_dir.path().join("note.md");
+        fs::write(&first_note, "one").unwrap();
+        fs::write(&second_note, "two").unwrap();
+
+        // The second window has nothing yet, while the first has its folder.
+        adopt_folder(&first, first_dir.path().to_string_lossy().into_owned()).unwrap();
+        assert!(within_vault(&vault_of(&first), &first_note).is_ok());
+        assert!(within_vault(&vault_of(&second), &first_note).is_err());
+
+        // Opening a folder in the second does not move the first.
+        adopt_folder(&second, second_dir.path().to_string_lossy().into_owned()).unwrap();
+        assert!(within_vault(&vault_of(&second), &second_note).is_ok());
+        assert!(within_vault(&vault_of(&first), &first_note).is_ok());
+        assert!(within_vault(&vault_of(&first), &second_note).is_err());
+    }
+
+    /// Both windows watch the same folder, but only the one that has read the
+    /// note is told it changed - and it is told alone.
+    #[test]
+    fn a_change_is_announced_to_the_window_that_holds_the_note() {
+        let (_app, first, second) = two_windows();
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("note.md");
+        fs::write(&note, "hello").unwrap();
+        let folder = dir.path().to_string_lossy().into_owned();
+        adopt_folder(&first, folder.clone()).unwrap();
+        adopt_folder(&second, folder).unwrap();
+
+        let (heard_first, first_hears) = mpsc::channel();
+        let (heard_second, second_hears) = mpsc::channel();
+        first.listen(FILE_CHANGED_EVENT, move |_| {
+            let _ = heard_first.send(());
+        });
+        second.listen(FILE_CHANGED_EVENT, move |_| {
+            let _ = heard_second.send(());
+        });
+
+        let note = note.canonicalize().unwrap();
+        remember(&vault_of(&first), &note);
+        let later = SystemTime::now() + Duration::from_secs(5);
+        fs::File::options()
+            .write(true)
+            .open(&note)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+
+        assert!(first_hears.recv_timeout(Duration::from_secs(10)).is_ok());
+        assert!(second_hears
+            .recv_timeout(Duration::from_millis(500))
+            .is_err());
+    }
 }

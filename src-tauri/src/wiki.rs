@@ -1,10 +1,9 @@
 use crate::search::{markdown_notes, PREVIEW_LENGTH, SEARCHABLE_BYTES};
-use crate::state::{locked, Vault};
+use crate::state::{locked, vault_of};
 use crate::tasks::off_thread;
 use crate::tree::read_dir_recursive;
 use std::fs;
 use std::path::Path;
-use tauri::Manager;
 
 /// A `[[wiki-link]]` written in a note: which note, which line, and what is
 /// between the brackets - resolving that to a note is the frontend's, which
@@ -93,10 +92,10 @@ pub(crate) fn vault_wiki_links(root: &Path) -> Result<Vec<WikiLinkRef>, String> 
 /// Every wiki-link written in the open vault, for the backlinks panel.
 #[tauri::command]
 pub(crate) async fn list_wiki_links(
-    app_handle: tauri::AppHandle,
+    window: tauri::WebviewWindow,
 ) -> Result<Vec<WikiLinkRef>, String> {
     off_thread(move || {
-        let root = locked(&app_handle.state::<Vault>().root).clone();
+        let root = locked(&vault_of(&window).root).clone();
         match root {
             Some(root) => vault_wiki_links(&root),
             None => Ok(Vec::new()),

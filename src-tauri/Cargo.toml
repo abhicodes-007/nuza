@@ -70,6 +70,11 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 
+# A window without a screen, so a test can stand two of them up and check that
+# what one opens is not what the other sees. Test builds only.
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
