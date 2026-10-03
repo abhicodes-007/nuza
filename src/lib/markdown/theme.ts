@@ -508,6 +508,9 @@ const editorTheme = EditorView.theme(
        inside an HTML block are drawn as real blank lines. Headings and list
        markers have to be restated too, since Tailwind's preflight strips them
        from every element on the page. */
+    ".cm-md-math": { whiteSpace: "normal" },
+    ".cm-md-math-block": { display: "block", padding: "0.5em 0", textAlign: "center", overflowX: "auto" },
+    ".cm-md-math-source": { fontFamily: CODE_FONT_FAMILY, color: ink.code },
     ".cm-md-html": { whiteSpace: "normal" },
     ".cm-md-html-block": { display: "block", padding: "0.3em 0" },
     ".cm-md-html h1": { fontSize: "1.6em" },

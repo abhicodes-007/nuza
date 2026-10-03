@@ -3,6 +3,7 @@ import { ChangeSet, EditorState, Range, StateField, Text } from "@codemirror/sta
 import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import { FrontmatterRange, frontmatterRange, readFrontmatter } from "./frontmatter";
+import { mathSource } from "./math";
 import { rendersHtml } from "./sanitize";
 import { isLocalImageTarget, noteDirectory, resolveImageSource, safeExternalHref } from "./sources";
 import { readWikiLink } from "./wikiLinks";
@@ -11,6 +12,7 @@ import {
   HtmlWidget,
   ImageWidget,
   LinkThumbnailWidget,
+  MathWidget,
   PropertiesWidget,
   RuleWidget,
   TableAlignment,
@@ -30,6 +32,9 @@ const ORDERED_MARK = Decoration.mark({ class: "cm-md-ordered-mark" });
 const QUOTE_LINE = Decoration.line({ class: "cm-md-quote" });
 const TASK_DONE = Decoration.mark({ class: "cm-md-task-done" });
 const RULE_LINE = Decoration.line({ class: "cm-md-mark" });
+/** Math with the caret in it: the TeX as written, in the code face. */
+const MATH_SOURCE = Decoration.mark({ class: "cm-md-math-source" });
+const MATH_LINE = Decoration.line({ class: "cm-md-math-source" });
 /** Frontmatter with the caret in it: plain text, and plainly not prose. */
 const FRONTMATTER_LINE = Decoration.line({ class: "cm-md-frontmatter" });
 
@@ -442,6 +447,36 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
       out.push((isBeingEdited(state, from, to) ? DIMMED : HIDDEN).range(from, to));
     }
     return;
+  }
+
+  if (name === "InlineMath") {
+    if (isBeingEdited(state, from, to)) {
+      out.push(MATH_SOURCE.range(from, to));
+      return false;
+    }
+    out.push(
+      Decoration.replace({ widget: new MathWidget(mathSource(doc.sliceString(from, to)), false) }).range(
+        from,
+        to
+      )
+    );
+    return false;
+  }
+
+  if (name === "BlockMath") {
+    const first = doc.lineAt(from);
+    const last = doc.lineAt(to);
+    if (isBeingEdited(state, from, to)) {
+      eachLine(doc, from, to, (lineStart) => out.push(MATH_LINE.range(lineStart)));
+      return false;
+    }
+    out.push(
+      Decoration.replace({
+        widget: new MathWidget(mathSource(doc.sliceString(from, to)), true),
+        block: true,
+      }).range(first.from, last.to)
+    );
+    return false;
   }
 
   if (name === "WikiLink") {

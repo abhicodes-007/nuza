@@ -14,6 +14,7 @@ import { attachments } from "./attachments";
 import { listIndent } from "./listIndent";
 import { continueListItem, insertNewLine } from "./lists";
 import { liveMarkdownPreview } from "./livePreview";
+import { MathSyntax } from "./math";
 import { findInNote } from "./searchPanel";
 import { noteDirectory } from "./sources";
 import { headingFlash, jumpToHeading } from "./headings";
@@ -97,7 +98,7 @@ export const liveMarkdown: Extension = [
   // `codeLanguages` is what gives a fenced block its own colours. Each grammar
   // is fetched the first time a block asks for it, so a note that never shows
   // code never pays for one.
-  markdown({ extensions: [GFM, WikiLink, Tag], codeLanguages: languages, addKeymap: false }),
+  markdown({ extensions: [GFM, WikiLink, Tag, MathSyntax], codeLanguages: languages, addKeymap: false }),
   markdownEditingKeymap,
   EditorView.lineWrapping,
   nuzaEditorTheme,
