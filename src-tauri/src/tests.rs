@@ -1043,7 +1043,9 @@ fn lists_the_tags_in_the_notes_a_vault_shows() {
 }
 
 /// Two real windows, with no screen behind them: the label a command is called
-/// from is what picks the vault.
+/// from is what picks the vault. Not built on Windows, where the test
+/// executable cannot start with a webview in it - see Cargo.toml.
+#[cfg(not(windows))]
 mod windows {
     use super::*;
     use crate::folder::adopt_folder;
