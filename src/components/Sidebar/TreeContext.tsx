@@ -29,6 +29,11 @@ export interface TreeActions {
   moveEntry: (path: string, targetDir: string) => void;
   /** Files dragged in from outside the app, to be copied into `directory`. */
   attachFiles: (directory: string, files: File[]) => void;
+  /**
+   * Reads what is inside a folder that has just been opened. Rejects when the
+   * folder did not answer, so its row can say so.
+   */
+  loadFolder: (path: string) => Promise<void>;
 }
 
 export const TreeContext = createContext<TreeActions | null>(null);

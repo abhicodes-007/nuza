@@ -4,10 +4,13 @@ import {
   addFile,
   ensureDirectory,
   findEntry,
+  hasUnavailable,
+  isRead,
   moveEntry,
   nameOf,
   parentOf,
   removeEntry,
+  setChildren,
   sortTree,
   touchEntry,
 } from "../src/lib/fileTree";
@@ -177,5 +180,114 @@ describe("touchEntry", () => {
   test("gives the same tree back for a note it does not list", () => {
     const tree = [{ name: "a.md", path: "/v/a.md", isDirectory: false }];
     expect(touchEntry(tree, "/v", "untitled.md")).toBe(tree);
+  });
+});
+
+/** A vault read a folder at a time: `deep` has been listed but not opened. */
+function lazyTree(): FileEntry[] {
+  return [
+    { name: "deep", path: "/v/deep", isDirectory: true },
+    {
+      name: "notes",
+      path: "/v/notes",
+      isDirectory: true,
+      children: [
+        { name: "inner", path: "/v/notes/inner", isDirectory: true },
+        { name: "a.md", path: "/v/notes/a.md", isDirectory: false },
+      ],
+    },
+  ];
+}
+
+describe("a tree read a folder at a time", () => {
+  test("a folder with no children has not been read, and one with none has", () => {
+    const [deep, notes] = lazyTree();
+    expect(isRead(deep)).toBe(false);
+    expect(isRead(notes)).toBe(true);
+    expect(isRead({ name: "empty", path: "/v/empty", isDirectory: true, children: [] })).toBe(true);
+  });
+
+  test("setChildren fills in a folder that was only listed", () => {
+    const children: FileEntry[] = [{ name: "x.md", path: "/v/deep/x.md", isDirectory: false }];
+    const next = setChildren(lazyTree(), ROOT, "/v/deep", children);
+    expect(findEntry(next, "/v/deep")?.children).toEqual(children);
+    expect(findEntry(next, "/v/deep/x.md")?.name).toBe("x.md");
+  });
+
+  test("setChildren reaches a folder inside one that has been read", () => {
+    const children: FileEntry[] = [{ name: "y.md", path: "/v/notes/inner/y.md", isDirectory: false }];
+    const before = lazyTree();
+    const next = setChildren(before, ROOT, "/v/notes/inner", children);
+    expect(findEntry(next, "/v/notes/inner/y.md")?.name).toBe("y.md");
+    // The rest of the tree is carried over, not copied.
+    expect(next[0]).toBe(before[0]);
+  });
+
+  test("setChildren does not go through a folder that has not been read", () => {
+    const before = lazyTree();
+    const next = setChildren(before, ROOT, "/v/deep/under", []);
+    expect(next[0]).toBe(before[0]);
+    expect(isRead(next[0])).toBe(false);
+  });
+
+  test("setChildren for the root is the whole tree", () => {
+    const top: FileEntry[] = [{ name: "z.md", path: "/v/z.md", isDirectory: false }];
+    expect(setChildren(lazyTree(), ROOT, ROOT, top)).toBe(top);
+  });
+
+  test("a note added under a folder that has not been read is left for when it is", () => {
+    const entry: FileEntry = { name: "new.md", path: "/v/deep/new.md", isDirectory: false };
+    const next = addEntry(lazyTree(), ROOT, entry);
+    // Giving it a `children` of just this one note would make the folder look
+    // read, and hide everything else that is in it.
+    expect(isRead(next[0])).toBe(false);
+  });
+
+  test("a note added under a folder that has been read goes in", () => {
+    const entry: FileEntry = { name: "new.md", path: "/v/notes/new.md", isDirectory: false };
+    expect(findEntry(addEntry(lazyTree(), ROOT, entry), "/v/notes/new.md")).not.toBeNull();
+  });
+
+  test("a file landing somewhere never opened does not invent the folders above it", () => {
+    const next = addFile(lazyTree(), ROOT, "/v/deep/media/pic.png");
+    expect(findEntry(next, "/v/deep/media/pic.png")).toBeNull();
+    expect(isRead(next[0])).toBe(false);
+  });
+
+  test("moving a folder that has not been read keeps it that way", () => {
+    const next = moveEntry(lazyTree(), ROOT, "/v/deep", "/v/renamed");
+    const moved = findEntry(next, "/v/renamed");
+    expect(moved?.name).toBe("renamed");
+    expect(isRead(moved!)).toBe(false);
+  });
+
+  test("sorting by date leaves a folder that has not been read unread", () => {
+    const sorted = sortTree(lazyTree(), "modified");
+    expect(isRead(sorted.find((entry) => entry.name === "deep")!)).toBe(false);
+  });
+
+  test("touching a note in a folder that has not been read changes nothing", () => {
+    const before = lazyTree();
+    expect(touchEntry(before, ROOT, "/v/deep/a.md")).toBe(before);
+  });
+});
+
+describe("hasUnavailable", () => {
+  test("is true when a row of the folder did not answer", () => {
+    const folder: FileEntry = {
+      name: "cloud",
+      path: "/v/cloud",
+      isDirectory: true,
+      children: [
+        { name: "here.md", path: "/v/cloud/here.md", isDirectory: false },
+        { name: "away.md", path: "/v/cloud/away.md", isDirectory: false, unavailable: true },
+      ],
+    };
+    expect(hasUnavailable(folder)).toBe(true);
+    expect(hasUnavailable({ ...folder, children: folder.children!.slice(0, 1) })).toBe(false);
+  });
+
+  test("is false for a folder that has not been read", () => {
+    expect(hasUnavailable({ name: "d", path: "/v/d", isDirectory: true })).toBe(false);
   });
 });

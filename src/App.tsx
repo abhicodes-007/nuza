@@ -121,6 +121,8 @@ function App() {
     restoreRecovered,
     discardRecovered,
     folderData,
+    fileIndex,
+    loadFolder,
     rootPath,
     openFolder,
     openVault,
@@ -289,14 +291,7 @@ function App() {
     (path: string) => {
       const view = linkView ?? editorView;
       if (!view || !rootPath) return;
-      const notes: string[] = [];
-      const collect = (entries: typeof folderData) => {
-        for (const entry of entries) {
-          if (entry.children) collect(entry.children);
-          else if (/\.md$/i.test(entry.name)) notes.push(entry.path);
-        }
-      };
-      collect(folderData);
+      const notes = fileIndex.notes;
 
       // Resolved from the folder of the note the link is going into, which in
       // the split is not the one in the main pane.
@@ -311,7 +306,7 @@ function App() {
       });
       view.focus();
     },
-    [linkView, editorView, sideView, sideFile, rootPath, folderData, currentFile]
+    [linkView, editorView, sideView, sideFile, rootPath, fileIndex.notes, currentFile]
   );
 
   const editorMenuItems = useCallback(
@@ -589,6 +584,9 @@ function App() {
             <Sidebar
               ref={sidebarRef}
               data={folderData}
+              searchTree={fileIndex.tree}
+              notes={fileIndex.notes}
+              onLoadFolder={loadFolder}
               rootPath={rootPath}
               onOpenFolder={openFolder}
               onFileSelect={selectFile}
@@ -630,7 +628,7 @@ function App() {
       <FileSearchPalette
         isOpen={isQuickOpenOpen}
         onClose={closeQuickOpen}
-        data={folderData}
+        data={fileIndex.tree}
         openPaths={openPaths}
         recentPaths={recentFiles}
         currentFile={currentFile}
@@ -643,7 +641,7 @@ function App() {
           setIsLinkPickerOpen(false);
           (linkView ?? editorView)?.focus();
         }}
-        data={folderData}
+        data={fileIndex.tree}
         openPaths={openPaths}
         recentPaths={recentFiles}
         currentFile={currentFile}

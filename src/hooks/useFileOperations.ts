@@ -12,6 +12,7 @@ import {
   joinPath,
   moveEntry as moveTreeEntry,
   removeEntry,
+  setChildren,
 } from "@/lib/fileTree";
 import { report } from "@/lib/notices";
 import { readScratch, writeScratch } from "@/lib/scratch";
@@ -24,6 +25,7 @@ import { OpenTarget, planOpen } from "@/lib/launchTarget";
 import { jumpToHeading } from "@/lib/markdown/headings";
 import { WIKI_LINK_EVENT, WikiLinkRequest, resolveWikiLink } from "@/lib/markdown/wikiLinks";
 import { useDocuments } from "./useDocuments";
+import { useFileIndex } from "./useFileIndex";
 
 const UNTITLED_FILE = "untitled.md";
 
@@ -133,6 +135,11 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const closedRef = useRef<ClosedTab[]>([]);
   const folderDataRef = useRef(folderData);
   folderDataRef.current = folderData;
+  // Every file in the vault, not only those in the folders the sidebar has
+  // opened: what a wiki-link or a closed tab is looked for among.
+  const fileIndex = useFileIndex(rootPath);
+  const fileIndexRef = useRef(fileIndex);
+  fileIndexRef.current = fileIndex;
 
   currentFileRef.current = currentFile;
   rootPathRef.current = rootPath;
@@ -739,7 +746,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     const open = new Set(openPathsRef.current);
     let tab: ClosedTab | undefined;
     while ((tab = closedRef.current.pop())) {
-      if (!open.has(tab.path) && findEntry(folderDataRef.current, tab.path)) break;
+      const there = fileIndexRef.current.paths.has(tab.path) || findEntry(folderDataRef.current, tab.path);
+      if (!open.has(tab.path) && there) break;
     }
     if (!tab) return;
 
@@ -859,14 +867,17 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
         return;
       }
 
-      const notes: string[] = [];
+      // The index knows the whole vault; the tree knows a note made a moment
+      // ago, before the index has heard of it.
+      const known = new Set(fileIndexRef.current.notes);
       const collect = (entries: FileEntry[]) => {
         for (const entry of entries) {
           if (entry.children) collect(entry.children);
-          else if (/\.md$/i.test(entry.name)) notes.push(entry.path);
+          else if (/\.md$/i.test(entry.name)) known.add(entry.path);
         }
       };
       collect(folderDataRef.current);
+      const notes = [...known];
 
       const found = resolveWikiLink(target, notes, root, fromDirectory);
       if (found) {
@@ -917,6 +928,19 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       void listening.then((unlisten) => unlisten());
     };
   }, [openTarget]);
+
+  /**
+   * Reads what is inside a folder the sidebar has just opened. Rejects when the
+   * folder did not answer, which the row says; the next time it is opened it
+   * is asked again.
+   */
+  const loadFolder = useCallback(async (path: string) => {
+    const root = rootPathRef.current;
+    const children = await invoke<FileEntry[]>("list_folder", { path });
+    // The vault was switched while the folder was being read.
+    if (!root || root !== rootPathRef.current) return;
+    setFolderData((tree) => setChildren(tree, root, path, children));
+  }, []);
 
   const createFolder = useCallback(async (parentPath: string, name: string) => {
     await invoke("create_folder", { parentPath, name });
@@ -986,6 +1010,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     dirtyPaths,
     conflicts,
     folderData,
+    fileIndex,
+    loadFolder,
     rootPath,
     openFolder,
     openVault,

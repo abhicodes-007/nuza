@@ -1,5 +1,5 @@
 import { memo, Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { ArrowUpDown, ChevronsDownUp, FilePlus, FolderPlus, Search, X } from "lucide-react";
+import { ArrowUpDown, ChevronsDownUp, FilePlus, FolderPlus, Regex, Search, X } from "lucide-react";
 import { cn } from "cn";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { draggedPath, endDrag } from "@/lib/dragSource";
@@ -34,7 +34,14 @@ export interface SidebarHandle {
 }
 
 interface SidebarProps {
+  /** The tree as far as it has been opened. */
   data: FileEntry[];
+  /** Every file in the vault, as a tree, for searching: the folders not opened yet are in it too. */
+  searchTree: FileEntry[];
+  /** Every note in the vault, for the panels that look through all of them. */
+  notes: string[];
+  /** Reads what is inside a folder that has just been opened. */
+  onLoadFolder: (path: string) => Promise<void>;
   rootPath?: string | null;
   onOpenFolder?: () => void;
   onFileSelect?: (path: string) => void;
@@ -66,6 +73,9 @@ interface SidebarProps {
 
 function Sidebar({
   data,
+  searchTree,
+  notes,
+  onLoadFolder,
   rootPath,
   onOpenFolder,
   onFileSelect,
@@ -102,8 +112,8 @@ function Sidebar({
   // Only for a note in the vault: the scratch note has no name to link to.
   const inVault = !!rootPath && currentFile.startsWith(rootPath);
   // Fetched folded too: the count on the heading is worth having on its own.
-  const backlinks = useBacklinks(currentFile, rootPath ?? null, data, inVault);
-  const tags = useTags(currentFile, rootPath ?? null, data, !!rootPath && tagsOpen);
+  const backlinks = useBacklinks(currentFile, rootPath ?? null, notes, inVault);
+  const tags = useTags(currentFile, rootPath ?? null, notes, !!rootPath && tagsOpen);
   // Storage can hold anything; an order that is not one falls back to name.
   const order = SORT_ORDERS.some((option) => option.id === sortOrder) ? sortOrder : "name";
   /** The tree in the order it is shown in. For name order it is the tree itself. */
@@ -111,14 +121,27 @@ function Sidebar({
   const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [query, setQuery] = useState("");
+  // Whether what is typed is a regular expression to look for in the notes'
+  // text, rather than words. Kept: someone who searches with patterns does so
+  // every time.
+  const [patternSearch, setPatternSearch] = usePersistedState("searchByPattern", false);
   const [activeIndex, setActiveIndex] = useState(0);
   const treeRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const hasFolder = !!data && data.length > 0 && !!rootPath;
 
-  const matches = useMemo(() => (isSearching ? searchFiles(data, query) : []), [isSearching, data, query]);
-  const contentHits = useContentSearch(query, isSearching && hasFolder);
+  // File names are matched as words; a pattern is not a name, so with one
+  // there are no file matches, only the lines it finds.
+  const matches = useMemo(
+    () => (isSearching && !patternSearch ? searchFiles(searchTree, query) : []),
+    [isSearching, patternSearch, searchTree, query]
+  );
+  const { hits: contentHits, error: searchError } = useContentSearch(
+    query,
+    isSearching && hasFolder,
+    patternSearch
+  );
   const resultCount = matches.length + contentHits.length;
   /** With nothing typed the tree stays put, so opening search never blanks the panel. */
   const showResults = isSearching && query.trim().length > 0;
@@ -469,6 +492,7 @@ function Sidebar({
       openContextMenu,
       moveEntry,
       attachFiles,
+      loadFolder: onLoadFolder,
     }),
     [
       onFileSelect,
@@ -482,6 +506,7 @@ function Sidebar({
       openContextMenu,
       moveEntry,
       attachFiles,
+      onLoadFolder,
     ]
   );
 
@@ -575,7 +600,7 @@ function Sidebar({
             <input
               ref={searchRef}
               value={query}
-              placeholder="Find a file or text"
+              placeholder={patternSearch ? "Find text by pattern" : "Find a file or text"}
               aria-label="Search files"
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -584,6 +609,22 @@ function Sidebar({
               onKeyDown={onSearchKeyDown}
               className="min-w-0 flex-1 bg-transparent text-xs text-white outline-none placeholder:text-zinc-600"
             />
+            <button
+              onClick={() => {
+                setPatternSearch((on) => !on);
+                setActiveIndex(0);
+                searchRef.current?.focus();
+              }}
+              title={patternSearch ? "Regular Expression: On" : "Regular Expression: Off"}
+              aria-label="Search by regular expression"
+              aria-pressed={patternSearch}
+              className={cn(
+                "shrink-0 cursor-pointer rounded transition-colors hover:text-white",
+                patternSearch ? "text-[var(--nuza-accent)]" : "text-zinc-600"
+              )}
+            >
+              <Regex className="h-3 w-3" />
+            </button>
             {query && (
               <button
                 onClick={() => {
@@ -640,6 +681,7 @@ function Sidebar({
           <SearchResults
             matches={matches}
             contentHits={contentHits}
+            error={searchError}
             rootPath={rootPath ?? ""}
             activeIndex={activeIndex}
             currentFile={currentFile}
