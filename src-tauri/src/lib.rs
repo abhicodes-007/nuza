@@ -2,11 +2,14 @@ mod cli;
 mod files;
 mod folder;
 mod fonts;
+mod index;
 mod launch;
 mod media;
 mod menu;
+mod multiwindow;
 mod recovery;
 mod search;
+mod slow;
 mod state;
 mod tags;
 mod tasks;
@@ -19,8 +22,7 @@ mod window;
 mod tests;
 
 use std::path::Path;
-use std::sync::Mutex;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,19 +32,25 @@ pub fn run() {
     // stopped before it sets anything else up, and its arguments come here.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-        if let Some(target) = cli::target_from_args(&args, Path::new(&cwd)) {
-            let _ = app.emit(launch::OPEN_TARGET_EVENT, target);
-        }
-        // Whether or not it named anything, the person has just run the
-        // command, and wants to see the app.
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
+        let target = cli::target_from_args(&args, Path::new(&cwd));
+        let app = app.clone();
+        // Off the thread the arguments arrive on: opening a window from the
+        // thread that pumps the event loop can wait on itself.
+        std::thread::spawn(move || match target {
+            // To the window that has it, or one with nothing open, or a new one.
+            Some(target) => multiwindow::open_path(&app, target),
+            // Plain `nuza`: the person has just run the command, and wants to
+            // see the app.
+            None => multiwindow::raise_recent(&app),
+        });
     }));
 
     let builder = builder
+        // Before any window exists to be told about them.
+        .manage(multiwindow::Recent::default())
+        .manage(multiwindow::Quit::default())
+        .manage(multiwindow::ShuttingDown::default())
+        .manage(state::LaunchTarget::default())
         // A note's images and video, served against the open folder rather
         // than against a list of every folder ever opened.
         .register_asynchronous_uri_scheme_protocol(
@@ -72,7 +80,10 @@ pub fn run() {
             let launched = std::env::current_dir()
                 .ok()
                 .and_then(|cwd| cli::target_from_args(&std::env::args().collect::<Vec<_>>(), &cwd));
-            app.manage(state::LaunchTarget(Mutex::new(launched)));
+            if let Some(target) = launched.clone() {
+                app.state::<state::LaunchTarget>()
+                    .queue(multiwindow::MAIN_WINDOW, target);
+            }
 
             // A window without a backdrop is a window that paints itself
             // opaque - the frontend already handles that, and it is not worth
@@ -82,32 +93,45 @@ pub fn run() {
                     eprintln!("nuza: no window backdrop on this platform: {}", error);
                 }
             }
+
+            // The windows the last run ended with, brought back: the first on
+            // the main window, the rest beside it.
+            multiwindow::restore_windows(app.handle(), launched.as_ref());
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // The window's folder goes with it, and its watcher with that.
-            if let tauri::WindowEvent::Destroyed = event {
-                window.state::<state::Windows>().remove(window.label());
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::Focused(true) => {
+                window
+                    .state::<multiwindow::Recent>()
+                    .focused(window.label());
             }
+            // The last one closing is the app being left; the windows are
+            // written down before the first of them goes.
+            tauri::WindowEvent::CloseRequested { .. } => {
+                multiwindow::window_closing(window.app_handle());
+            }
+            // The window's folder goes with it, and its watcher with that.
+            tauri::WindowEvent::Destroyed => {
+                multiwindow::window_gone(window.app_handle(), window.label());
+            }
+            _ => {}
         })
         .plugin(tauri_plugin_opener::init());
 
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(menu::build_menu).on_menu_event(|app, event| {
-        if event.id() == menu::CLOSE_TAB_ITEM {
-            let _ = app.emit(menu::CLOSE_TAB_EVENT, ());
-        } else if event.id() == menu::QUIT_ITEM {
-            let _ = app.emit(menu::QUIT_EVENT, ());
-        }
-    });
+    let builder = builder
+        .menu(menu::build_menu)
+        .on_menu_event(menu::on_menu_event);
 
     builder
         .invoke_handler(tauri::generate_handler![
             files::save_file_picker,
             folder::load_folder_picker,
             folder::open_folder,
+            folder::list_folder,
             files::read_file,
             search::search_contents,
+            search::list_files,
             wiki::list_wiki_links,
             search::list_tags,
             launch::take_launch_target,
@@ -126,6 +150,8 @@ pub fn run() {
             files::move_entry,
             files::delete_entry,
             fonts::list_system_fonts,
+            multiwindow::open_new_window,
+            multiwindow::window_ready_to_quit,
             window::set_transparency,
             window::print_page,
             menu::set_close_tab_shortcut

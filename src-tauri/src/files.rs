@@ -1,3 +1,4 @@
+use crate::search::note_changes;
 use crate::state::{
     changed_since_read, locked, remember, vault_of, within_vault, within_vault_to_create,
     within_vault_to_write, Vault, CHANGED_ON_DISK,
@@ -26,11 +27,12 @@ pub(crate) async fn create_file(
             .write(true)
             .create_new(true)
             .open(&path)
-            .map(|_| ())
             .map_err(|error| match already_exists(&error) {
                 true => format!("\"{}\" already exists", name),
                 false => error.to_string(),
-            })
+            })?;
+        note_changes(&window, &[&path]);
+        Ok(())
     })
     .await
 }
@@ -51,7 +53,9 @@ pub(crate) async fn create_folder(
         fs::create_dir(&path).map_err(|error| match already_exists(&error) {
             true => format!("\"{}\" already exists", name),
             false => error.to_string(),
-        })
+        })?;
+        note_changes(&window, &[&path]);
+        Ok(())
     })
     .await
 }
@@ -77,6 +81,7 @@ pub(crate) async fn rename_entry(
             true => format!("\"{}\" already exists", new_name),
             false => error.to_string(),
         })?;
+        note_changes(&window, &[&old, &new_path]);
         Ok(new_path.to_string_lossy().into_owned())
     })
     .await
@@ -99,6 +104,7 @@ pub(crate) async fn move_entry(
             true => format!("\"{}\" already exists in destination", name),
             false => error.to_string(),
         })?;
+        note_changes(&window, &[&old, &new_path]);
         Ok(new_path.to_string_lossy().into_owned())
     })
     .await
@@ -158,7 +164,9 @@ pub(crate) async fn delete_entry(window: tauri::WebviewWindow, path: String) -> 
         // undo anywhere in this app - the confirm dialog was the only thing
         // between a misclick and work that is simply gone. The OS has an undo
         // for exactly this, and it is the one people already know how to use.
-        trashing().delete(&p).map_err(|error| error.to_string())
+        trashing().delete(&p).map_err(|error| error.to_string())?;
+        note_changes(&window, &[&p]);
+        Ok(())
     })
     .await
 }
@@ -527,7 +535,9 @@ pub(crate) async fn duplicate_entry(
     off_thread(move || {
         let vault = vault_of(&window);
         let source = within_vault(&vault, Path::new(&path))?;
-        duplicate_file(&source).map(|copy| copy.to_string_lossy().into_owned())
+        let copy = duplicate_file(&source)?;
+        note_changes(&window, &[&copy]);
+        Ok(copy.to_string_lossy().into_owned())
     })
     .await
 }
@@ -647,6 +657,7 @@ pub(crate) async fn write_file(
 
         write_atomically(&path, content.as_bytes())?;
         remember(&vault, &path);
+        note_changes(&window, &[&path]);
         Ok(())
     })
     .await

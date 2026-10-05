@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { toAccelerator } from "@/lib/keybinding";
 import { isMacPlatform } from "@/lib/platform";
+import { listenHere } from "@/lib/windowEvents";
 
 /** Fired by the "Close Tab" item the app puts in the macOS menu bar. */
 const CLOSE_TAB_EVENT = "menu:close-tab";
@@ -29,7 +29,7 @@ export function useCloseTabMenu(binding: string, closeTab: () => void) {
   useEffect(() => {
     if (!isMacPlatform()) return;
 
-    const listening = listen(CLOSE_TAB_EVENT, () => latest.current());
+    const listening = listenHere(CLOSE_TAB_EVENT, () => latest.current());
     return () => {
       void listening.then((stop) => stop());
     };

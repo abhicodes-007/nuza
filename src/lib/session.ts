@@ -27,16 +27,19 @@ const VAULT_LIMIT = 12;
 type Sessions = Record<string, Session>;
 
 /**
- * The parsed store, held so that recording a tab change is not a fresh parse
- * of every vault's session. This module is the only writer, so what is here is
- * what is in storage - it is filled on the first read and replaced on write.
+ * The parsed store, with the text it was parsed from. Parsing every vault's
+ * session on each tab change would be wasteful, so the result is held - but it
+ * is only reused while storage still holds exactly that text. Another window
+ * of the app writes to the same store, and a copy held in this one would
+ * otherwise go stale, and the next write from here would erase what that window
+ * had recorded in the meantime.
  */
-let cache: Sessions | null = null;
+let cache: { raw: string | null; sessions: Sessions } | null = null;
 
 /** Storage is a file anyone can edit, so what comes back is checked. */
-function parseSessions(): Sessions {
+function parseSessions(raw: string | null): Sessions {
   try {
-    const stored: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
+    const stored: unknown = JSON.parse(raw ?? "{}");
     if (!stored || typeof stored !== "object" || Array.isArray(stored)) return {};
 
     const sessions: Sessions = {};
@@ -59,8 +62,17 @@ function parseSessions(): Sessions {
 }
 
 function readSessions(): Sessions {
-  cache ??= parseSessions();
-  return cache;
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    // Storage is blocked: nothing is remembered, and that is not an error.
+  }
+  if (cache && cache.raw === raw) return cache.sessions;
+
+  const sessions = parseSessions(raw);
+  cache = { raw, sessions };
+  return sessions;
 }
 
 /** What was open in `vault` last time, or nothing if it has no record. */
@@ -76,6 +88,8 @@ export function readSession(vault: string): Session {
 export function writeSession(vault: string, session: Session) {
   if (!vault) return;
 
+  // Read again from storage rather than trusted from before: only this vault's
+  // entry is replaced, so what another window recorded for its own is kept.
   // Copied rather than edited in place, so a write that storage refuses does
   // not leave the cache claiming something that was never recorded.
   const sessions = { ...readSessions() };
@@ -88,8 +102,9 @@ export function writeSession(vault: string, session: Session) {
   const trimmed = Object.fromEntries(Object.entries(sessions).slice(-VAULT_LIMIT));
 
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-    cache = trimmed;
+    const raw = JSON.stringify(trimmed);
+    localStorage.setItem(STORAGE_KEY, raw);
+    cache = { raw, sessions: trimmed };
   } catch (error) {
     console.error("Failed to record the open tabs:", error);
   }

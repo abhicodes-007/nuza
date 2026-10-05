@@ -1,9 +1,7 @@
-use crate::search::{markdown_notes, PREVIEW_LENGTH, SEARCHABLE_BYTES};
-use crate::state::{locked, vault_of};
+use crate::index::VaultIndex;
+use crate::search::PREVIEW_LENGTH;
+use crate::state::vault_of;
 use crate::tasks::off_thread;
-use crate::tree::read_dir_recursive;
-use std::fs;
-use std::path::Path;
 
 /// A `[[wiki-link]]` written in a note: which note, which line, and what is
 /// between the brackets - resolving that to a note is the frontend's, which
@@ -61,31 +59,28 @@ pub(crate) fn wiki_links_in(from: &str, text: &str) -> Vec<WikiLinkRef> {
     links
 }
 
-/// Reads each of the notes under `root` that the sidebar lists - and that are
-/// small enough, and text - and collects what `scan` finds in them, given the
-/// note's path and its text.
-pub(crate) fn scan_vault<T>(
-    root: &Path,
-    scan: impl Fn(&str, &str) -> Vec<T>,
-) -> Result<Vec<T>, String> {
-    let mut notes = Vec::new();
-    markdown_notes(&read_dir_recursive(root)?, &mut notes);
-
-    let mut found = Vec::new();
-    for note in notes {
-        if fs::metadata(&note).map_or(true, |meta| meta.len() > SEARCHABLE_BYTES) {
-            continue;
-        }
-        let Ok(text) = fs::read_to_string(&note) else {
-            continue;
-        };
-        found.extend(scan(&note.to_string_lossy(), &text));
-    }
-    Ok(found)
+/// What `scan` finds in each of the notes `index` holds - the ones the sidebar
+/// lists, that are small enough, and text - given the note's path and its text.
+pub(crate) fn scan_index<T>(index: &VaultIndex, scan: impl Fn(&str, &str) -> Vec<T>) -> Vec<T> {
+    index
+        .notes()
+        .iter()
+        .flat_map(|note| scan(&note.path, &note.text))
+        .collect()
 }
 
+#[cfg(test)]
+/// The same for the notes under `root`, read from a fresh index of it.
+pub(crate) fn scan_vault<T>(
+    root: &std::path::Path,
+    scan: impl Fn(&str, &str) -> Vec<T>,
+) -> Result<Vec<T>, String> {
+    Ok(scan_index(&*VaultIndex::for_folder(root)?, scan))
+}
+
+#[cfg(test)]
 /// Every wiki-link in the notes under `root`, the ones the sidebar lists.
-pub(crate) fn vault_wiki_links(root: &Path) -> Result<Vec<WikiLinkRef>, String> {
+pub(crate) fn vault_wiki_links(root: &std::path::Path) -> Result<Vec<WikiLinkRef>, String> {
     scan_vault(root, wiki_links_in)
 }
 
@@ -95,11 +90,8 @@ pub(crate) async fn list_wiki_links(
     window: tauri::WebviewWindow,
 ) -> Result<Vec<WikiLinkRef>, String> {
     off_thread(move || {
-        let root = locked(&vault_of(&window).root).clone();
-        match root {
-            Some(root) => vault_wiki_links(&root),
-            None => Ok(Vec::new()),
-        }
+        let index = vault_of(&window).index.clone();
+        Ok(scan_index(&index, wiki_links_in))
     })
     .await
 }

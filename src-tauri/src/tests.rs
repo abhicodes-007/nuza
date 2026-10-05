@@ -1,21 +1,31 @@
+use crate::cli::OpenTarget;
 use crate::files::{
     already_exists, create_unused, duplicate_file, exact_file_name, move_destination,
     rename_no_replace, safe_file_name, write_atomically,
 };
 use crate::fonts::system_font_families;
+use crate::index::VaultIndex;
 use crate::media::{body_bytes, header_text, media_body, requested_path};
+use crate::multiwindow::{
+    plan_restore, read_saved, route, usable_frame, Frame, Open, Quit, Quitting, Route, SavedWindow,
+    Screen,
+};
 use crate::recovery::{recovery_file, Recovery};
-use crate::search::{fold, search_text, search_vault, ContentHit};
+use crate::search::{search_index, search_notes, search_text, search_vault, ContentHit, Matcher};
+use crate::slow::{run_all, run_one};
 use crate::state::{
     changed_since_read, locked, remember, within_vault, within_vault_to_create,
     within_vault_to_write, Vault, Windows,
 };
-use crate::tree::{read_dir_recursive, FileEntry, MAX_TREE_DEPTH};
+use crate::tree::{
+    list_folder_with, probe, read_dir_recursive, read_dir_recursive_with, FileEntry, Patience,
+    Probe, Prober, MAX_TREE_DEPTH,
+};
 use crate::wiki::{scan_vault, vault_wiki_links, wiki_links_in};
 use std::fs;
 use std::path::Path;
-use std::sync::Mutex;
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 /// The note as it stands on disk, for asserting a write actually landed.
 fn contents(path: &Path) -> String {
@@ -888,13 +898,18 @@ fn reads_a_body_sent_raw_or_as_json() {
     assert!(body_bytes(&wrong).is_err());
 }
 
-fn folded(query: &str) -> Vec<char> {
-    query.chars().map(fold).collect()
+fn matcher(query: &str) -> Matcher {
+    Matcher::text(query).expect("the query should have something in it")
 }
 
 #[test]
 fn finds_a_line_ignoring_case() {
-    let hits = search_text("n.md", "first\nSecond Line here\nthird", &folded("line"), 5);
+    let hits = search_text(
+        "n.md",
+        "first\nSecond Line here\nthird",
+        &matcher("line"),
+        5,
+    );
     assert_eq!(
         hits,
         [ContentHit {
@@ -911,7 +926,7 @@ fn finds_a_line_ignoring_case() {
 #[test]
 fn counts_columns_in_utf16() {
     // The emoji is two UTF-16 units, as it is to CodeMirror.
-    let hits = search_text("n.md", "\u{1F600} caf\u{e9} ok", &folded("OK"), 5);
+    let hits = search_text("n.md", "\u{1F600} caf\u{e9} ok", &matcher("OK"), 5);
     assert_eq!(hits[0].column, 8);
     assert_eq!(hits[0].preview_start, 8);
 }
@@ -919,7 +934,7 @@ fn counts_columns_in_utf16() {
 #[test]
 fn cuts_a_long_line_down_around_the_match() {
     let line = format!("{}needle{}", "a".repeat(200), "b".repeat(200));
-    let hit = &search_text("n.md", &line, &folded("needle"), 5)[0];
+    let hit = &search_text("n.md", &line, &matcher("needle"), 5)[0];
     assert!(hit.preview.starts_with('\u{2026}') && hit.preview.ends_with('\u{2026}'));
     let start = hit.preview_start;
     let shown: String = hit.preview.chars().skip(start).take(6).collect();
@@ -930,7 +945,7 @@ fn cuts_a_long_line_down_around_the_match() {
 #[test]
 fn stops_at_the_limit() {
     let text = "x\n".repeat(10);
-    assert_eq!(search_text("n.md", &text, &folded("x"), 3).len(), 3);
+    assert_eq!(search_text("n.md", &text, &matcher("x"), 3).len(), 3);
 }
 
 #[test]
@@ -1132,4 +1147,810 @@ mod windows {
             .recv_timeout(Duration::from_millis(500))
             .is_err());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Calls with a deadline, and a tree that is read a folder at a time
+// ---------------------------------------------------------------------------
+
+/// A call that does not return until the test is over, and then does: standing
+/// in for a call that never returns without keeping a thread of the pool
+/// asleep long enough to starve every other test that is using it.
+struct Stall(Arc<std::sync::atomic::AtomicBool>);
+
+impl Stall {
+    fn new() -> Stall {
+        Stall(Arc::new(std::sync::atomic::AtomicBool::new(false)))
+    }
+
+    fn call(&self) -> impl Fn() + Send + Sync + 'static {
+        let released = self.0.clone();
+        move || {
+            while !released.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+impl Drop for Stall {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_call_that_never_returns_does_not_hold_up_the_others() {
+    let stall = Stall::new();
+    let started = Instant::now();
+    let jobs: Vec<Box<dyn FnOnce() -> usize + Send>> = (0..6usize)
+        .map(|n| {
+            let wait = stall.call();
+            Box::new(move || {
+                if n == 2 {
+                    wait();
+                }
+                n
+            }) as Box<dyn FnOnce() -> usize + Send>
+        })
+        .collect();
+
+    let answers = run_all(jobs, Duration::from_millis(300));
+    assert_eq!(answers, [Some(0), Some(1), None, Some(3), Some(4), Some(5)]);
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn a_single_slow_call_gives_up_at_its_deadline() {
+    let stall = Stall::new();
+    let wait = stall.call();
+    let started = Instant::now();
+    let answer = run_one(
+        move || {
+            wait();
+            1
+        },
+        Duration::from_millis(200),
+    );
+    assert_eq!(answer, None);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(run_one(|| 7, Duration::from_secs(5)), Some(7));
+}
+
+/// More stuck calls than the pool has threads still leaves it able to answer.
+#[test]
+fn stuck_calls_do_not_use_the_pool_up() {
+    let stall = Stall::new();
+    let stuck: Vec<Box<dyn FnOnce() + Send>> = (0..12)
+        .map(|_| Box::new(stall.call()) as Box<dyn FnOnce() + Send>)
+        .collect();
+    let answers = run_all(stuck, Duration::from_millis(100));
+    assert!(answers.iter().all(Option::is_none));
+
+    assert_eq!(
+        run_one(|| "still here", Duration::from_secs(2)),
+        Some("still here")
+    );
+}
+
+const QUICK: Patience = Patience {
+    entry: Duration::from_millis(500),
+    listing: Duration::from_secs(5),
+};
+
+/// A probe that never answers for one name, as an offline placeholder would not.
+fn stalls_on(name: &'static str, stall: &Stall) -> Prober {
+    let wait = stall.call();
+    Arc::new(move |path, is_symlink| {
+        if path.file_name().is_some_and(|file| file == name) {
+            wait();
+        }
+        probe(path, is_symlink)
+    })
+}
+
+#[test]
+fn a_file_that_does_not_answer_is_listed_as_unavailable() {
+    let stall = Stall::new();
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("a.md"), "").unwrap();
+    fs::write(dir.path().join("offline.md"), "").unwrap();
+    fs::write(dir.path().join("z.md"), "").unwrap();
+    let resolved = dir.path().canonicalize().unwrap();
+
+    let started = Instant::now();
+    let listed = list_folder_with(
+        dir.path(),
+        &resolved,
+        &resolved,
+        QUICK,
+        stalls_on("offline.md", &stall),
+    )
+    .unwrap();
+
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(names(&listed), ["a.md", "offline.md", "z.md"]);
+    let flags: Vec<bool> = listed.iter().map(|entry| entry.unavailable).collect();
+    assert_eq!(flags, [false, true, false]);
+    // Nothing is known about it, and the rows that answered are whole.
+    assert!(listed[1].modified.is_none());
+    assert!(listed[0].modified.is_some() && listed[2].modified.is_some());
+}
+
+/// A folder full of offline files costs the wait once, not once a file.
+#[test]
+fn a_folder_of_offline_files_costs_one_wait() {
+    let stall = Stall::new();
+    let dir = tempfile::tempdir().unwrap();
+    for n in 0..20 {
+        fs::write(dir.path().join(format!("offline-{n}.md")), "").unwrap();
+    }
+    let resolved = dir.path().canonicalize().unwrap();
+    let wait = stall.call();
+    let everything_stalls: Prober = Arc::new(move |_, _| {
+        wait();
+        Probe::default()
+    });
+
+    let started = Instant::now();
+    let listed =
+        list_folder_with(dir.path(), &resolved, &resolved, QUICK, everything_stalls).unwrap();
+
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(listed.len(), 20);
+    assert!(listed.iter().all(|entry| entry.unavailable));
+}
+
+#[test]
+fn a_whole_vault_is_read_past_a_file_that_does_not_answer() {
+    let stall = Stall::new();
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("sub").join("offline.md"), "").unwrap();
+    fs::write(dir.path().join("sub").join("here.md"), "").unwrap();
+    fs::write(dir.path().join("top.md"), "").unwrap();
+
+    let tree = read_dir_recursive_with(dir.path(), QUICK, stalls_on("offline.md", &stall)).unwrap();
+    let sub = tree[0].children.as_ref().unwrap();
+    assert_eq!(names(sub), ["here.md", "offline.md"]);
+    assert!(sub[1].unavailable && !sub[0].unavailable);
+    assert_eq!(names(&tree), ["sub/", "top.md"]);
+}
+
+#[test]
+fn a_folder_lists_its_rows_and_leaves_what_is_inside_them_unread() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("notes")).unwrap();
+    fs::write(dir.path().join("notes").join("inner.md"), "").unwrap();
+    fs::write(dir.path().join("a.md"), "").unwrap();
+    let resolved = dir.path().canonicalize().unwrap();
+
+    let top = list_folder_with(dir.path(), &resolved, &resolved, QUICK, Arc::new(probe)).unwrap();
+    assert_eq!(names(&top), ["notes/", "a.md"]);
+    // A folder with no `children` has not been read - which is not the same as
+    // one with nothing in it.
+    assert!(top[0].children.is_none());
+
+    let inside = list_folder_with(
+        &dir.path().join("notes"),
+        &resolved.join("notes"),
+        &resolved,
+        QUICK,
+        Arc::new(probe),
+    )
+    .unwrap();
+    assert_eq!(names(&inside), ["inner.md"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_left_out_a_link_back_up_the_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let resolved = dir.path().canonicalize().unwrap();
+    fs::create_dir(dir.path().join("notes")).unwrap();
+    std::os::unix::fs::symlink(dir.path(), dir.path().join("notes").join("up")).unwrap();
+    std::os::unix::fs::symlink(".", dir.path().join("notes").join("here")).unwrap();
+    fs::create_dir(dir.path().join("other")).unwrap();
+    std::os::unix::fs::symlink(
+        dir.path().join("other"),
+        dir.path().join("notes").join("beside"),
+    )
+    .unwrap();
+
+    let inside = list_folder_with(
+        &dir.path().join("notes"),
+        &resolved.join("notes"),
+        &resolved,
+        QUICK,
+        Arc::new(probe),
+    )
+    .unwrap();
+    // The two that lead back to where the walk already is are not shown; one
+    // that leads somewhere else in the vault is.
+    assert_eq!(names(&inside), ["beside/"]);
+}
+
+#[test]
+fn a_folder_that_is_not_there_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let resolved = dir.path().canonicalize().unwrap();
+    assert!(list_folder_with(
+        &dir.path().join("gone"),
+        &resolved.join("gone"),
+        &resolved,
+        QUICK,
+        Arc::new(probe)
+    )
+    .is_err());
+}
+
+// ---------------------------------------------------------------------------
+// The index, and a search that ranks
+// ---------------------------------------------------------------------------
+
+fn note(path: &str, name: &str, text: &str) -> crate::index::Note {
+    crate::index::Note {
+        path: path.to_string(),
+        name: name.to_string(),
+        text: Arc::from(text),
+    }
+}
+
+fn lines(hits: &[ContentHit]) -> Vec<(String, usize)> {
+    hits.iter()
+        .map(|hit| (hit.path.clone(), hit.line))
+        .collect()
+}
+
+#[test]
+fn a_whole_word_outranks_one_inside_another() {
+    let notes = [note(
+        "a.md",
+        "a.md",
+        "the catalog is long\nsee the cat here\nconcatenate",
+    )];
+    let hits = search_notes(&notes, &matcher("cat"));
+    // Whole word first, then the word that merely starts with it, then the
+    // one that has it in the middle.
+    assert_eq!(
+        lines(&hits),
+        [("a.md".into(), 2), ("a.md".into(), 1), ("a.md".into(), 3)]
+    );
+}
+
+#[test]
+fn a_heading_and_the_case_typed_rank_higher() {
+    let notes = [note(
+        "a.md",
+        "a.md",
+        "plain mention of Rust here\n# Rust\nlater mention of rust here",
+    )];
+    let hits = search_notes(&notes, &matcher("Rust"));
+    assert_eq!(hits[0].line, 2);
+    // Same words, but one is in the case that was typed.
+    assert_eq!(hits[1].line, 1);
+    assert_eq!(hits[2].line, 3);
+}
+
+#[test]
+fn a_note_named_for_the_query_comes_before_one_that_mentions_it() {
+    let notes = [
+        note(
+            "a-mention.md",
+            "a-mention.md",
+            "we talked about gardening today",
+        ),
+        note(
+            "gardening.md",
+            "gardening.md",
+            "we talked about gardening today",
+        ),
+    ];
+    let hits = search_notes(&notes, &matcher("gardening"));
+    assert_eq!(hits[0].path, "gardening.md");
+    assert_eq!(hits[1].path, "a-mention.md");
+}
+
+#[test]
+fn a_note_contributes_its_best_lines_not_its_first() {
+    let mut text = String::new();
+    for _ in 0..8 {
+        text.push_str(
+            "a long paragraph that only mentions the word somewhere deep inside: xcatx\n",
+        );
+    }
+    text.push_str("# cat\n");
+    let hits = search_notes(&[note("a.md", "a.md", &text)], &matcher("cat"));
+    assert_eq!(hits.len(), 5);
+    // The heading is the last line of the note, and still the first hit.
+    assert_eq!(hits[0].line, 9);
+}
+
+#[test]
+fn a_lot_of_hits_are_cut_off_at_the_limit() {
+    let notes: Vec<_> = (0..300)
+        .map(|n| note(&format!("{n:03}.md"), &format!("{n:03}.md"), "needle"))
+        .collect();
+    assert_eq!(search_notes(&notes, &matcher("needle")).len(), 200);
+}
+
+#[test]
+fn a_line_with_accents_is_searched_as_well_as_one_without() {
+    let notes = [note("a.md", "a.md", "Caf\u{e9} au lait\ncafe au lait")];
+    let hits = search_notes(&notes, &matcher("CAF\u{c9}"));
+    assert_eq!(lines(&hits), [("a.md".into(), 1)]);
+    let hits = search_notes(&notes, &matcher("cafe"));
+    assert_eq!(lines(&hits), [("a.md".into(), 2)]);
+}
+
+#[test]
+fn a_pattern_finds_what_a_pattern_describes() {
+    let notes = [note(
+        "a.md",
+        "a.md",
+        "due 2026-10-05\nnothing here\ncall 555-0100 or 555-0199",
+    )];
+    let pattern = Matcher::pattern(r"\d{4}-\d{2}-\d{2}").unwrap().unwrap();
+    let hits = search_notes(&notes, &pattern);
+    assert_eq!(lines(&hits), [("a.md".into(), 1)]);
+    assert_eq!((hits[0].column, hits[0].match_length), (4, 10));
+
+    // Ignoring case, like the plain search.
+    let pattern = Matcher::pattern("NOTHING").unwrap().unwrap();
+    assert_eq!(search_notes(&notes, &pattern).len(), 1);
+}
+
+#[test]
+fn a_pattern_counts_columns_in_characters_and_utf16() {
+    let notes = [note("a.md", "a.md", "\u{1F600} caf\u{e9} ok")];
+    let pattern = Matcher::pattern("ok").unwrap().unwrap();
+    let hits = search_notes(&notes, &pattern);
+    assert_eq!(hits[0].column, 8);
+}
+
+#[test]
+fn a_pattern_that_matches_nothing_in_a_line_is_not_a_hit() {
+    let notes = [note("a.md", "a.md", "abc\n\nxyz")];
+    // `x*` matches the empty string everywhere, which is nothing to show.
+    let pattern = Matcher::pattern("q*").unwrap().unwrap();
+    assert!(search_notes(&notes, &pattern).is_empty());
+}
+
+#[test]
+fn a_bad_or_empty_pattern_is_dealt_with_rather_than_run() {
+    assert!(Matcher::pattern("(unclosed").is_err());
+    assert!(Matcher::pattern(&"a".repeat(600)).is_err());
+    assert!(Matcher::pattern("   ").unwrap().is_none());
+}
+
+/// Nested repetition is the textbook pattern that never finishes in a
+/// backtracking engine. It has to come back here.
+#[test]
+fn a_pattern_that_would_hang_a_backtracking_engine_comes_back() {
+    let line = format!("{}!", "a".repeat(5000));
+    let notes = [note("a.md", "a.md", &line)];
+    let pattern = Matcher::pattern("(a+)+$").unwrap().unwrap();
+
+    let started = Instant::now();
+    let _ = search_notes(&notes, &pattern);
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+fn paths(index: &VaultIndex) -> Vec<String> {
+    index
+        .files()
+        .iter()
+        .map(|entry| {
+            Path::new(&entry.path)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn the_index_lists_every_file_in_the_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("a").join("b")).unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    fs::write(dir.path().join("top.md"), "").unwrap();
+    fs::write(dir.path().join("a").join("b").join("deep.md"), "").unwrap();
+    fs::write(dir.path().join("a").join("pic.png"), "").unwrap();
+    fs::write(dir.path().join(".git").join("HEAD"), "").unwrap();
+
+    let index = VaultIndex::for_folder(dir.path()).unwrap();
+    let mut found = paths(&index);
+    found.sort();
+    assert_eq!(found, ["deep.md", "pic.png", "top.md"]);
+}
+
+#[test]
+fn the_index_follows_a_note_being_made_and_taken_away() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("one.md"), "").unwrap();
+    let index = VaultIndex::for_folder(dir.path()).unwrap();
+
+    let two = dir.path().join("two.md");
+    fs::write(&two, "").unwrap();
+    assert!(index.refresh(&two), "a new file changes the list");
+    assert_eq!(paths(&index), ["one.md", "two.md"]);
+
+    // Saving it again is not news: it is the same file.
+    assert!(!index.refresh(&two));
+
+    fs::remove_file(&two).unwrap();
+    assert!(index.refresh(&two));
+    assert_eq!(paths(&index), ["one.md"]);
+    assert!(!index.refresh(&two), "nothing left to forget");
+}
+
+#[test]
+fn the_index_follows_a_folder_that_moves() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("old")).unwrap();
+    fs::write(dir.path().join("old").join("a.md"), "").unwrap();
+    fs::write(dir.path().join("old").join("b.md"), "").unwrap();
+    let index = VaultIndex::for_folder(dir.path()).unwrap();
+
+    fs::rename(dir.path().join("old"), dir.path().join("new")).unwrap();
+    assert!(index.refresh(&dir.path().join("old")));
+    assert!(index.refresh(&dir.path().join("new")));
+
+    let found: Vec<String> = index.files().into_iter().map(|entry| entry.path).collect();
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().all(|path| path.contains("new")));
+}
+
+#[test]
+fn the_index_does_not_hear_about_the_folders_a_vault_leaves_out() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join(".git")).unwrap();
+    let index = VaultIndex::for_folder(dir.path()).unwrap();
+
+    let inside = dir.path().join(".git").join("index.md");
+    fs::write(&inside, "").unwrap();
+    assert!(!index.refresh(&inside));
+    assert!(index.files().is_empty());
+    // And not a path from somewhere else altogether.
+    let elsewhere = tempfile::tempdir().unwrap();
+    fs::write(elsewhere.path().join("x.md"), "").unwrap();
+    assert!(!index.refresh(&elsewhere.path().join("x.md")));
+}
+
+/// The watcher reports paths as the OS spells them, which for a vault opened
+/// through a link is not how the sidebar spells them.
+#[cfg(unix)]
+#[test]
+fn the_index_reports_paths_as_the_folder_was_opened() {
+    let real = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let link = parent.path().join("vault");
+    std::os::unix::fs::symlink(real.path(), &link).unwrap();
+    let index = VaultIndex::for_folder(&link).unwrap();
+
+    let note = real.path().canonicalize().unwrap().join("new.md");
+    fs::write(&note, "").unwrap();
+    assert!(index.refresh(&note));
+    assert_eq!(
+        index.files()[0].path,
+        link.join("new.md").to_string_lossy().into_owned()
+    );
+}
+
+#[test]
+fn a_notes_text_is_read_once_and_again_after_it_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.md");
+    fs::write(&path, "first").unwrap();
+    fs::write(dir.path().join("b.txt"), "not a note").unwrap();
+    let index = VaultIndex::for_folder(dir.path()).unwrap();
+
+    let notes = index.notes();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(&*notes[0].text, "first");
+
+    // Changed behind the index's back: what it holds is what it read, until it
+    // is told. This is the point - a query is not a walk of the vault.
+    fs::write(&path, "second").unwrap();
+    assert_eq!(&*index.notes()[0].text, "first");
+
+    index.refresh(&path);
+    assert_eq!(&*index.notes()[0].text, "second");
+}
+
+#[test]
+fn a_search_finds_a_note_written_after_the_index_was_built() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("a.md"), "nothing").unwrap();
+    let index = VaultIndex::for_folder(dir.path()).unwrap();
+    assert!(search_index(&index, "needle", false).unwrap().is_empty());
+
+    let fresh = dir.path().join("fresh.md");
+    fs::write(&fresh, "a needle here").unwrap();
+    index.refresh(&fresh);
+    let hits = search_index(&index, "needle", false).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].path.ends_with("fresh.md"));
+}
+
+#[test]
+fn a_search_by_pattern_says_so_when_the_pattern_is_bad() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = VaultIndex::for_folder(dir.path()).unwrap();
+    assert_eq!(
+        search_index(&index, "(", true).unwrap_err(),
+        "Not a valid regular expression"
+    );
+    assert!(search_index(&index, "  ", true).unwrap().is_empty());
+}
+
+#[test]
+fn a_note_too_large_to_be_a_note_is_not_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let big = fs::File::create(dir.path().join("big.md")).unwrap();
+    big.set_len(crate::index::SEARCHABLE_BYTES + 1).unwrap();
+    fs::write(dir.path().join("small.md"), "needle").unwrap();
+    let index = VaultIndex::for_folder(dir.path()).unwrap();
+
+    let notes = index.notes();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].path.ends_with("small.md"));
+}
+
+// ---------------------------------------------------------------------------
+// More than one window
+// ---------------------------------------------------------------------------
+
+fn window(label: &str, root: Option<&str>) -> Open {
+    Open {
+        label: label.to_string(),
+        root: root.map(std::path::PathBuf::from),
+    }
+}
+
+fn folder(path: &str) -> OpenTarget {
+    OpenTarget {
+        kind: "folder",
+        path: path.to_string(),
+    }
+}
+
+fn note_at(path: &str) -> OpenTarget {
+    OpenTarget {
+        kind: "file",
+        path: path.to_string(),
+    }
+}
+
+#[test]
+fn a_folder_goes_to_the_window_that_has_it_open() {
+    let windows = [window("main", Some("/a")), window("w-1", Some("/b"))];
+    assert_eq!(
+        route(&windows, &folder("/b")),
+        Route::Existing("w-1".into())
+    );
+}
+
+#[test]
+fn a_note_goes_to_the_window_whose_vault_it_is_in() {
+    let windows = [window("main", Some("/a")), window("w-1", Some("/b"))];
+    assert_eq!(
+        route(&windows, &note_at("/b/deep/note.md")),
+        Route::Existing("w-1".into())
+    );
+}
+
+#[test]
+fn a_folder_inside_an_open_vault_is_not_that_vault() {
+    let windows = [window("main", Some("/a"))];
+    assert_eq!(route(&windows, &folder("/a/sub")), Route::Fresh);
+}
+
+#[test]
+fn a_neighbouring_folder_with_the_same_beginning_is_not_inside() {
+    let windows = [window("main", Some("/notes"))];
+    assert_eq!(route(&windows, &note_at("/notes-old/a.md")), Route::Fresh);
+}
+
+#[test]
+fn a_path_nobody_has_gets_a_window_with_nothing_open_before_a_new_one() {
+    let windows = [window("main", Some("/a")), window("w-1", None)];
+    assert_eq!(
+        route(&windows, &folder("/c")),
+        Route::Existing("w-1".into())
+    );
+}
+
+#[test]
+fn a_path_nobody_has_and_no_empty_window_gets_a_window_of_its_own() {
+    let windows = [window("main", Some("/a")), window("w-1", Some("/b"))];
+    assert_eq!(route(&windows, &folder("/c")), Route::Fresh);
+    assert_eq!(route(&[], &folder("/c")), Route::Fresh);
+}
+
+#[test]
+fn the_window_that_has_it_wins_over_an_empty_one_in_front() {
+    // The empty window is in front, but the folder is already open elsewhere.
+    let windows = [window("w-2", None), window("main", Some("/a"))];
+    assert_eq!(
+        route(&windows, &folder("/a")),
+        Route::Existing("main".into())
+    );
+}
+
+#[test]
+fn the_window_in_front_is_the_one_chosen_when_two_would_do() {
+    let windows = [window("w-1", Some("/a/x")), window("main", Some("/a"))];
+    assert_eq!(
+        route(&windows, &note_at("/a/x/n.md")),
+        Route::Existing("w-1".into())
+    );
+}
+
+#[test]
+fn a_quit_is_over_when_every_window_has_answered() {
+    let quit = Quit::default();
+    assert!(quit.begin(["main".to_string(), "w-1".to_string()]));
+    assert_eq!(quit.answered("w-1"), Quitting::Waiting);
+    assert_eq!(quit.answered("main"), Quitting::Done);
+}
+
+#[test]
+fn a_window_answering_twice_does_not_finish_the_quit_early() {
+    let quit = Quit::default();
+    quit.begin(["main".to_string(), "w-1".to_string()]);
+    assert_eq!(quit.answered("main"), Quitting::Waiting);
+    assert_eq!(quit.answered("main"), Quitting::Waiting);
+    assert_eq!(quit.answered("w-1"), Quitting::Done);
+}
+
+#[test]
+fn an_answer_with_no_quit_asked_for_is_not_a_quit() {
+    assert_eq!(Quit::default().answered("main"), Quitting::Idle);
+}
+
+#[test]
+fn a_second_quit_while_one_is_under_way_is_ignored() {
+    let quit = Quit::default();
+    assert!(quit.begin(["main".to_string()]));
+    assert!(!quit.begin(["main".to_string()]));
+}
+
+const SCREENS: [Screen; 2] = [
+    Screen {
+        x: 0.0,
+        y: 0.0,
+        width: 1440.0,
+        height: 900.0,
+    },
+    Screen {
+        x: -1920.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    },
+];
+
+fn frame(x: i32, y: i32, width: u32, height: u32) -> Frame {
+    Frame {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn a_window_is_put_back_where_it_was() {
+    assert!(usable_frame(&frame(100, 80, 800, 600), &SCREENS));
+    // On the second display, at negative x.
+    assert!(usable_frame(&frame(-1500, 100, 800, 600), &SCREENS));
+}
+
+/// The display it was on is no longer attached.
+#[test]
+fn a_window_that_would_be_off_every_screen_is_not_put_there() {
+    assert!(!usable_frame(&frame(3000, 100, 800, 600), &SCREENS[..1]));
+    assert!(!usable_frame(&frame(-1500, 100, 800, 600), &SCREENS[..1]));
+    assert!(!usable_frame(&frame(100, 5000, 800, 600), &SCREENS));
+    assert!(!usable_frame(&frame(100, 80, 800, 600), &[]));
+}
+
+#[test]
+fn a_window_too_small_or_too_big_to_use_is_not_put_back() {
+    assert!(!usable_frame(&frame(100, 80, 20, 20), &SCREENS));
+    assert!(!usable_frame(&frame(100, 80, 9000, 600), &SCREENS));
+}
+
+#[test]
+fn a_window_whose_corner_is_hanging_off_the_edge_is_not_put_back() {
+    // Its top-left is on the screen, but only just: nothing of it to grab.
+    assert!(!usable_frame(&frame(1430, 100, 800, 600), &SCREENS[..1]));
+}
+
+#[test]
+fn the_saved_windows_are_read_back_without_the_ones_that_are_gone() {
+    let here = tempfile::tempdir().unwrap();
+    let json = format!(
+        r#"[{{"root":{:?},"frame":{{"x":10,"y":20,"width":800,"height":600}}}},
+            {{"root":"/definitely/not/here","frame":null}}]"#,
+        here.path().to_string_lossy()
+    );
+    let saved = read_saved(json.as_bytes());
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].frame, Some(frame(10, 20, 800, 600)));
+}
+
+#[test]
+fn a_damaged_record_of_the_windows_is_no_windows() {
+    assert!(read_saved(b"not json").is_empty());
+    assert!(read_saved(b"{\"root\": 3}").is_empty());
+    assert!(read_saved(b"").is_empty());
+}
+
+fn saved(root: &str) -> SavedWindow {
+    SavedWindow {
+        root: root.to_string(),
+        frame: None,
+    }
+}
+
+#[test]
+fn the_first_saved_window_starts_the_app_and_the_rest_open_beside_it() {
+    let (first, others) = plan_restore(vec![saved("/a"), saved("/b"), saved("/c")], None);
+    assert_eq!(first, Some(saved("/a")));
+    assert_eq!(others, [saved("/b"), saved("/c")]);
+}
+
+#[test]
+fn nothing_saved_is_nothing_to_restore() {
+    assert_eq!(plan_restore(vec![], None), (None, vec![]));
+}
+
+/// Started with `nuza ~/b`: that window is the first, and the one that was
+/// already on `~/b` is not opened again.
+#[test]
+fn an_app_started_on_a_folder_keeps_the_others_but_not_that_one() {
+    let (first, others) = plan_restore(
+        vec![saved("/a"), saved("/b"), saved("/c")],
+        Some(&folder("/b")),
+    );
+    assert_eq!(first, None);
+    assert_eq!(others, [saved("/a"), saved("/c")]);
+}
+
+#[test]
+fn an_app_started_on_a_note_does_not_open_its_vault_twice() {
+    let (first, others) = plan_restore(
+        vec![saved("/a"), saved("/b")],
+        Some(&note_at("/b/deep/n.md")),
+    );
+    assert_eq!(first, None);
+    assert_eq!(others, [saved("/a")]);
+}
+
+/// A window with a launch target waiting for it is as good as on that folder.
+#[test]
+fn launch_targets_are_held_per_window() {
+    let launches = crate::state::LaunchTarget::default();
+    launches.queue("main", folder("/a"));
+    launches.queue("w-1", folder("/b"));
+
+    assert_eq!(launches.pending("w-1"), Some(folder("/b")));
+    assert_eq!(launches.take("w-1"), Some(folder("/b")));
+    assert_eq!(launches.take("w-1"), None, "it is handed over once");
+    assert_eq!(launches.take("main"), Some(folder("/a")));
+}
+
+#[test]
+fn the_folder_a_window_has_open_is_told_without_making_a_vault() {
+    let windows = Windows::default();
+    assert_eq!(windows.root("main"), None);
+
+    let dir = tempfile::tempdir().unwrap();
+    *locked(&windows.vault("main").root) = Some(dir.path().to_path_buf());
+    assert_eq!(windows.root("main"), Some(dir.path().to_path_buf()));
+    assert_eq!(windows.root("w-1"), None);
 }

@@ -36,6 +36,9 @@ tempfile = "3"
 # Notices a note being changed underneath the app - by a sync client, a
 # git checkout, or another editor.
 notify = "8"
+# The content search's regular-expression mode. Already compiled into the app
+# by tauri; this asks for it by name.
+regex = "1"
 # Deleting a note puts it in the Trash, the Recycle Bin or the XDG trash
 # rather than unlinking it - the app has no undo, and the OS does.
 trash = "5"

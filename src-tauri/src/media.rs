@@ -199,6 +199,7 @@ pub(crate) async fn write_media(
         let directory = within_vault(&vault, &directory)?;
         let (mut file, path) = create_unused(&directory, &safe_file_name(&name)?)?;
         std::io::Write::write_all(&mut file, &bytes).map_err(|e| e.to_string())?;
+        crate::search::note_changes(&window, &[&path]);
 
         Ok(path.to_string_lossy().into_owned())
     })

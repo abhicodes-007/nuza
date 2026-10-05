@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ChevronRight, File, Folder, FolderOpen } from "lucide-react";
+import { ChevronRight, CloudOff, File, Folder, FolderOpen } from "lucide-react";
 import {
   draggedPath,
   endDrag,
@@ -9,7 +9,7 @@ import {
   useIsDragOver,
 } from "@/lib/dragSource";
 import { nameProblem } from "@/lib/entryName";
-import { parentOf } from "@/lib/fileTree";
+import { hasUnavailable, parentOf } from "@/lib/fileTree";
 import { FileIcon } from "@/lib/utils";
 import { FileEntry } from "@/lib/types";
 import { useTreeContext } from "./TreeContext";
@@ -63,6 +63,7 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
     openContextMenu,
     moveEntry,
     attachFiles,
+    loadFolder,
   } = useTreeContext();
 
   const detailsRef = useRef<HTMLDetailsElement>(null);
@@ -73,6 +74,12 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
    * they stay, so closing and reopening a folder costs nothing.
    */
   const [contentsShown, setContentsShown] = useState(false);
+  /**
+   * Whether what is inside this folder is being read, or could not be. A folder
+   * is only read when it is opened, so a vault of any size opens at once; and a
+   * folder that did not answer is asked again the next time it is opened.
+   */
+  const [reading, setReading] = useState<"idle" | "loading" | "failed">("idle");
   const isRenaming = renamingPath === entry.path;
   const isDraggedOver = useIsDragOver(entry.path);
   const isBeingDragged = useIsDragged(entry.path);
@@ -147,7 +154,20 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
           // Fired however the folder is opened - a click, the keyboard, the
           // new-file row, the reveal below - since each sets `open`.
           onToggle={(event) => {
-            if (event.currentTarget.open) setContentsShown(true);
+            if (!event.currentTarget.open) return;
+            setContentsShown(true);
+
+            // Not read yet, or read when some of its rows could not be answered
+            // for - those may have come back since.
+            if (reading === "loading" || (entry.children && !hasUnavailable(entry))) return;
+            setReading("loading");
+            loadFolder(entry.path).then(
+              () => setReading("idle"),
+              (error) => {
+                console.error(`Couldn't read "${entry.path}":`, error);
+                setReading("failed");
+              }
+            );
           }}
           className="[&[open]>summary>.cm-tree-chevron]:rotate-90 [&[open]>summary>.cm-tree-folder]:hidden [&[open]>summary>.cm-tree-folder-open]:block"
         >
@@ -189,6 +209,7 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
             ) : (
               <span className="truncate">{entry.name}</span>
             )}
+            {entry.unavailable && <Unavailable />}
           </summary>
 
           <ul className="ml-5 cursor-pointer border-l border-zinc-700 pl-3">
@@ -197,6 +218,15 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
             )}
             {contentsShown &&
               entry.children?.map((child) => <MemoisedFileTreeNode key={child.path} entry={child} />)}
+            {contentsShown && !entry.children && reading !== "failed" && (
+              <li className="px-2 py-1 text-xs text-zinc-600">Loading</li>
+            )}
+            {reading === "failed" && !entry.children && (
+              <li className="flex items-center gap-1.5 px-2 py-1 text-xs text-zinc-500">
+                <CloudOff className="h-3 w-3 shrink-0" />
+                Not available right now. Close and open the folder to try again.
+              </li>
+            )}
           </ul>
         </details>
       </li>
@@ -246,10 +276,20 @@ function FileTreeNode({ entry }: { entry: FileEntry }) {
             className="min-w-0 flex-1 rounded bg-zinc-900 px-1 py-0.5 text-sm text-white outline outline-1 outline-blue-500"
           />
         ) : (
-          <span className="truncate">{entry.name}</span>
+          <span className={`truncate ${entry.unavailable ? "text-zinc-600" : ""}`}>{entry.name}</span>
         )}
+        {entry.unavailable && <Unavailable />}
       </button>
     </li>
+  );
+}
+
+/** Marks a row the filesystem did not answer for in time - offline, or on a share that has gone quiet. */
+function Unavailable() {
+  return (
+    <span title="Not available right now" className="ml-auto shrink-0 text-zinc-600">
+      <CloudOff className="h-3 w-3" aria-label="Not available right now" />
+    </span>
   );
 }
 

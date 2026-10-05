@@ -31,6 +31,9 @@ pub(crate) struct Vault {
     /// how notify stops watching, so replacing this is how switching vaults
     /// stops listening to the old one.
     pub(crate) watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// Every file in the folder, and the text of the notes, kept current as
+    /// the folder changes - what search, quick-open and the scans read.
+    pub(crate) index: Arc<crate::index::VaultIndex>,
 }
 
 /// Every window's vault, by the window's label.
@@ -50,6 +53,14 @@ impl Windows {
             .entry(label.to_string())
             .or_default()
             .clone()
+    }
+
+    /// The folder open in the window called `label`, if it has one. Unlike
+    /// `vault`, this does not make an entry for a window that has none.
+    pub(crate) fn root(&self, label: &str) -> Option<PathBuf> {
+        let vault = locked(&self.0).get(label).cloned()?;
+        let root = locked(&vault.root).clone();
+        root
     }
 
     /// Forgets a window that has closed, which drops its watcher with it.
@@ -148,7 +159,26 @@ pub(crate) fn within_vault_to_create(vault: &Vault, path: &Path) -> Result<PathB
     allow(vault, resolved.join(name))
 }
 
-/// What the command line the app was started with asked to open, until the
-/// window has asked for it.
+/// What each window has been asked to open, until it has asked for it.
+///
+/// The first window is started on what the command line named, and a window
+/// opened for a path is started on that path: either way the window is not yet
+/// listening when the target is decided, so it is held here for it to collect
+/// as it comes up - once, by label, so a second window never picks up the first's.
 #[derive(Default)]
-pub(crate) struct LaunchTarget(pub(crate) Mutex<Option<crate::cli::OpenTarget>>);
+pub(crate) struct LaunchTarget(pub(crate) Mutex<HashMap<String, crate::cli::OpenTarget>>);
+
+impl LaunchTarget {
+    pub(crate) fn queue(&self, label: &str, target: crate::cli::OpenTarget) {
+        locked(&self.0).insert(label.to_string(), target);
+    }
+
+    pub(crate) fn take(&self, label: &str) -> Option<crate::cli::OpenTarget> {
+        locked(&self.0).remove(label)
+    }
+
+    /// What the window has yet to collect, without collecting it.
+    pub(crate) fn pending(&self, label: &str) -> Option<crate::cli::OpenTarget> {
+        locked(&self.0).get(label).cloned()
+    }
+}
