@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KEYMAP_ACTIONS, KEYMAP_STORAGE_KEY, KeymapAction } from "@/lib/keymaps";
 import { firesWhileTyping, matchesBinding } from "@/lib/keybinding";
+import { changeFrom, valueFromChange } from "@/lib/storageSync";
 
 type KeymapOverrides = Partial<Record<KeymapAction, string>>;
 
@@ -16,10 +17,23 @@ function loadOverrides(): KeymapOverrides {
 /** Resolves the effective binding for every action, merging user overrides onto the defaults. */
 export function useKeymaps() {
   const [overrides, setOverrides] = useState<KeymapOverrides>(loadOverrides);
+  const latest = useRef(overrides);
+  latest.current = overrides;
 
   useEffect(() => {
     localStorage.setItem(KEYMAP_STORAGE_KEY, JSON.stringify(overrides));
   }, [overrides]);
+
+  // A binding changed in another window applies here too.
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      const changed = valueFromChange<KeymapOverrides>(changeFrom(event), KEYMAP_STORAGE_KEY, latest.current);
+      if (changed && changed.value && typeof changed.value === "object") setOverrides(changed.value);
+    }
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const bindings = useMemo(() => {
     const map = {} as Record<KeymapAction, string>;

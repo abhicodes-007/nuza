@@ -396,6 +396,8 @@ function App() {
         setIsSidebarOpen(true);
         sidebarRef.current?.focusSearch();
       },
+      "new-window": () =>
+        void invoke("open_new_window").catch((error) => report("Couldn't open a window", error)),
       "open-settings": () => setIsSettingsOpen((open) => !open),
       "toggle-vim-mode": () => setVimEnabled((enabled) => !enabled),
       "check-updates": checkForUpdates,

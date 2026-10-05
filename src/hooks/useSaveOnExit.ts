@@ -1,11 +1,11 @@
 import { useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { exit } from "@tauri-apps/plugin-process";
 import { isMacPlatform } from "@/lib/platform";
 import { flushPersistedState } from "./usePersistedState";
 
-/** Fired by the "Quit" item the app puts in the macOS menu bar. */
+/** Fired at every window by the "Quit" item the app puts in the macOS menu bar. */
 const QUIT_EVENT = "menu:quit";
 
 /**
@@ -22,6 +22,11 @@ const QUIT_EVENT = "menu:quit";
  * it is a menu key equivalent that ends the process before the webview is told
  * anything at all, so the app puts its own Quit item in the menu bar and that
  * item comes through here instead.
+ *
+ * With more than one window the two are different things. Closing a window
+ * saves that window and puts only it away; the app goes when the last one has.
+ * Quitting reaches every window: each saves, and says so, and the app goes when
+ * all of them have - one window answering is not the others being finished.
  */
 export function useSaveOnExit(flush: () => Promise<void>) {
   // Through a ref so a rebuilt `flush` does not mean tearing the listeners
@@ -30,27 +35,33 @@ export function useSaveOnExit(flush: () => Promise<void>) {
   latest.current = flush;
 
   useEffect(() => {
-    async function leave() {
+    async function save() {
       try {
         await latest.current();
       } catch (error) {
         // Quitting is not the moment to refuse to quit. Whatever could not be
-        // written is reported, and the app still goes.
+        // written is reported, and the window still goes.
         console.error("Failed to save on the way out:", error);
       }
       // Settings a debounce is still holding - a sidebar width let go of a
       // moment ago - would otherwise go with the process.
       flushPersistedState();
-      await exit(0);
     }
 
     const window = getCurrentWindow();
-    const closing = window.onCloseRequested((event) => {
+    const closing = window.onCloseRequested(async (event) => {
       // Held, not cancelled: the window goes as soon as the writes are done.
       event.preventDefault();
-      void leave();
+      await save();
+      await window.destroy();
     });
-    const quitting = isMacPlatform() ? listen(QUIT_EVENT, () => void leave()) : null;
+    const quitting = isMacPlatform()
+      ? listen(QUIT_EVENT, async () => {
+          await save();
+          // The app exits when every window has said this, or has run out of time.
+          await invoke("window_ready_to_quit");
+        })
+      : null;
 
     return () => {
       void closing.then((stop) => stop());

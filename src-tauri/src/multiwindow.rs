@@ -471,6 +471,11 @@ pub(crate) fn window_gone(app: &tauri::AppHandle, label: &str) {
     app.state::<Recent>().gone(label);
     app.state::<LaunchTarget>().take(label);
     changed(app);
+    // Closing the last window leaves the app, on every platform: there is no
+    // menu bar to keep it in with nothing open.
+    if app.webview_windows().is_empty() {
+        app.exit(0);
+    }
 }
 
 /// The set of windows has changed, or what one of them shows has: what is kept

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { changeFrom, valueFromChange } from "@/lib/storageSync";
 
 /** Writes held back by a debounce, keyed by storage key, so leaving can finish them. */
 const pending = new Map<string, () => void>();
@@ -34,6 +35,9 @@ interface Options {
  * Like useState, but the value is read from and written to localStorage
  * under `key`, so it survives app restarts. Falls back to `defaultValue`
  * if nothing is stored yet or the stored value can't be parsed.
+ *
+ * A change made to the same setting in another window arrives here too, so a
+ * font or a theme chosen in one window applies in all of them.
  */
 export function usePersistedState<T>(key: string, defaultValue: T, { debounceMs = 0 }: Options = {}) {
   const [value, setValue] = useState<T>(() => {
@@ -45,7 +49,32 @@ export function usePersistedState<T>(key: string, defaultValue: T, { debounceMs 
     }
   });
 
+  const latest = useRef(value);
+  latest.current = value;
+  /** Set when the value was taken from another window, which already stored it. */
+  const fromElsewhere = useRef(false);
+
   useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      const changed = valueFromChange(changeFrom(event), key, latest.current);
+      if (!changed) return;
+      fromElsewhere.current = true;
+      setValue(changed.value);
+    }
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [key]);
+
+  useEffect(() => {
+    // Not written back: it is what the other window wrote. Writing it again
+    // after a debounce could put an older value over a newer one that window
+    // has stored since, and the two would go back and forth.
+    if (fromElsewhere.current) {
+      fromElsewhere.current = false;
+      return;
+    }
+
     if (debounceMs <= 0) {
       store(key, value);
       return;

@@ -1,3 +1,5 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 /**
  * The scratch note, kept between runs and across vault switches.
  *
@@ -9,8 +11,24 @@
  */
 const STORAGE_KEY = "nuza:scratch";
 
+/**
+ * Only the first window has one. The note is a single buffer in storage, and
+ * every window of the app shares that storage: two windows each keeping it
+ * would write over one another and neither would be the note it left. The
+ * others start empty, and what is typed in them is not kept - a note worth
+ * keeping is one that has been saved to a file.
+ */
+function ownsScratch() {
+  try {
+    return getCurrentWindow().label === "main";
+  } catch {
+    // Not running inside a window at all, as in a test.
+    return true;
+  }
+}
 /** What was in the scratch note last time, or nothing if it was never used. */
 export function readScratch(): string {
+  if (!ownsScratch()) return "";
   try {
     return localStorage.getItem(STORAGE_KEY) ?? "";
   } catch {
@@ -20,6 +38,7 @@ export function readScratch(): string {
 
 /** Keeps `content`. An empty note forgets the entry rather than storing "". */
 export function writeScratch(content: string) {
+  if (!ownsScratch()) return;
   try {
     if (content) localStorage.setItem(STORAGE_KEY, content);
     else localStorage.removeItem(STORAGE_KEY);
