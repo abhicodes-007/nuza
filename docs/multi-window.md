@@ -1,6 +1,6 @@
 # Multi-window design
 
-Tracks [#148](https://github.com/puang59/nuza/issues/148). Status: step 1 of the rollout (a vault per window) is built; the rest is design.
+Tracks [#148](https://github.com/puang59/nuza/issues/148). Status: steps 1 to 5 of the rollout are built. Step 6, popping a note out into its own window, is not.
 
 ## What it is for
 
@@ -111,24 +111,32 @@ The macOS menu is app-wide, so `Window` menu entries listing open windows, and `
 
 ## Rollout
 
-Each step is its own PR, and each leaves the app working with one window.
+Each step is its own commit, and each leaves the app working with one window.
 
 1. **Per-window vault (Rust only). Done.** `Windows` map, commands take the calling window, `emit_to`, media label lookup, `Destroyed` cleanup. One window exists, so nothing is visible. Unit tests for the map, and for two vaults not seeing each other's paths or events.
-2. **Open a window.** `open_window`, capability glob, per-label launch targets, `New Window` command and shortcut, window set-up on every window, focus-existing resolver, single-instance routing.
-3. **Close and quit.** Per-window close, quit coordination with acks, per-window `close-tab`.
-4. **Frontend sharing.** `storage` listener for settings, session and vault list read-modify-write, scratch decision.
-5. **Restore windows** at launch, and the macOS `Window` menu.
+2. **Open a window. Done.** `multiwindow::open_window` builds a window from the first window's config, cascaded from the one in front. The capability covers `main` and `w-*`. Launch targets are held per label. `File > New Window` (`Cmd/Ctrl+Shift+N`, rebindable). `route` decides where a path goes and the single-instance hook uses it.
+3. **Close and quit. Done.** Closing a window saves it and destroys only it. Quit asks every window to save, counts the answers (`Quit`), and exits when all are in or after five seconds.
+4. **Frontend sharing. Done.** A `storage` listener for settings and the keymap, the session store re-read before each write, the scratch note kept by `main` only.
+5. **Restore windows. Done.** The open vaults and window frames are written to `windows.json` in the app data folder and brought back at launch. The macOS `Window` menu lists the open windows.
 6. _(Later)_ pop a note out into its own window.
+
+### What was decided building it
+
+- **A listener that means "this window" is registered on the window.** `listen` from `@tauri-apps/api/event` registers for any target, and Tauri hands a listener for any target every event of that name, whoever it was sent to. `emit_to` alone is not enough; the frontend uses `listenHere` (`lib/windowEvents.ts`), which registers on the current webview window.
+- **Scratch note:** `main` only. Other windows start with an empty buffer and do not keep it.
+- **Closing the last window exits the app**, on every platform, which is what closing the only window did before. There is no stay-in-the-dock mode.
+- **A path goes to the window that has it, then to a window with nothing open, then to a new window.** A window that has been opened for a path and has not yet collected it counts as already holding that folder, so two quick `nuza` commands do not race.
+- **New Window opens the welcome screen.** Only `main` reopens the last-used vault at launch; reopening it in a second window would put two windows on one vault.
+- **Opening the same vault in two windows from the vault switcher is allowed.** Only paths arriving from outside (the command line, Finder) are routed to the window that already has them. Two windows on one vault is safe: each has its own `known` mtimes, so the other's save shows as "changed on disk".
+- **Restore:** the set of windows at the moment of quitting comes back, not the set from the last time a window was closed. Frames are checked against the screens that are attached now, and one that would be off every screen is dropped.
 
 ## Testing
 
-- Rust: the window map, label routing, the open-target resolver (pure function: roots + target in, "focus label" or "new window" out), and quit-ack counting (pure counter with a timeout).
-- Frontend: session and vault-list merging with a stale cache, `storage`-driven settings.
+- Rust: the window map, label routing, the open-target resolver (pure function: roots + target in, "focus label" or "new window" out), quit-ack counting, frame validation against screens, and what to restore.
+- Frontend: session merging with a stale cache, the scratch note per window, `storage` change reading.
 - Manual, in the test vault (not the real notes): two windows on two vaults; edit the same file from two windows and check the changed-on-disk path; close one and confirm the other keeps saving; `nuza <path>` from a terminal with the app open; quit with unsaved edits in both.
 
 ## Open questions
 
-- **Scratch note.** Keep it shared (last write wins), key it by window, or give it to `main` only? Leaning: `main` only, other windows start empty.
-- **Close behaviour on macOS** with zero windows: quit, or stay in the dock as today? Needs checking against the current behaviour before step 3.
 - **Duplicate-vault policy.** Focus-existing is simple; some people want one vault in two windows to compare notes. Split view (a second note beside the first) already covers that.
 - **Watcher cost.** One watcher per window is simplest; if many windows open the same large vault it could be shared behind a refcount. Not worth building until it is seen to matter.
