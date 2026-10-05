@@ -1,3 +1,4 @@
+use crate::cli::OpenTarget;
 use crate::files::{
     already_exists, create_unused, duplicate_file, exact_file_name, move_destination,
     rename_no_replace, safe_file_name, write_atomically,
@@ -5,6 +6,10 @@ use crate::files::{
 use crate::fonts::system_font_families;
 use crate::index::VaultIndex;
 use crate::media::{body_bytes, header_text, media_body, requested_path};
+use crate::multiwindow::{
+    plan_restore, read_saved, route, usable_frame, Frame, Open, Quit, Quitting, Route, SavedWindow,
+    Screen,
+};
 use crate::recovery::{recovery_file, Recovery};
 use crate::search::{search_index, search_notes, search_text, search_vault, ContentHit, Matcher};
 use crate::slow::{run_all, run_one};
@@ -1692,4 +1697,260 @@ fn a_note_too_large_to_be_a_note_is_not_read() {
     let notes = index.notes();
     assert_eq!(notes.len(), 1);
     assert!(notes[0].path.ends_with("small.md"));
+}
+
+// ---------------------------------------------------------------------------
+// More than one window
+// ---------------------------------------------------------------------------
+
+fn window(label: &str, root: Option<&str>) -> Open {
+    Open {
+        label: label.to_string(),
+        root: root.map(std::path::PathBuf::from),
+    }
+}
+
+fn folder(path: &str) -> OpenTarget {
+    OpenTarget {
+        kind: "folder",
+        path: path.to_string(),
+    }
+}
+
+fn note_at(path: &str) -> OpenTarget {
+    OpenTarget {
+        kind: "file",
+        path: path.to_string(),
+    }
+}
+
+#[test]
+fn a_folder_goes_to_the_window_that_has_it_open() {
+    let windows = [window("main", Some("/a")), window("w-1", Some("/b"))];
+    assert_eq!(
+        route(&windows, &folder("/b")),
+        Route::Existing("w-1".into())
+    );
+}
+
+#[test]
+fn a_note_goes_to_the_window_whose_vault_it_is_in() {
+    let windows = [window("main", Some("/a")), window("w-1", Some("/b"))];
+    assert_eq!(
+        route(&windows, &note_at("/b/deep/note.md")),
+        Route::Existing("w-1".into())
+    );
+}
+
+#[test]
+fn a_folder_inside_an_open_vault_is_not_that_vault() {
+    let windows = [window("main", Some("/a"))];
+    assert_eq!(route(&windows, &folder("/a/sub")), Route::Fresh);
+}
+
+#[test]
+fn a_neighbouring_folder_with_the_same_beginning_is_not_inside() {
+    let windows = [window("main", Some("/notes"))];
+    assert_eq!(route(&windows, &note_at("/notes-old/a.md")), Route::Fresh);
+}
+
+#[test]
+fn a_path_nobody_has_gets_a_window_with_nothing_open_before_a_new_one() {
+    let windows = [window("main", Some("/a")), window("w-1", None)];
+    assert_eq!(
+        route(&windows, &folder("/c")),
+        Route::Existing("w-1".into())
+    );
+}
+
+#[test]
+fn a_path_nobody_has_and_no_empty_window_gets_a_window_of_its_own() {
+    let windows = [window("main", Some("/a")), window("w-1", Some("/b"))];
+    assert_eq!(route(&windows, &folder("/c")), Route::Fresh);
+    assert_eq!(route(&[], &folder("/c")), Route::Fresh);
+}
+
+#[test]
+fn the_window_that_has_it_wins_over_an_empty_one_in_front() {
+    // The empty window is in front, but the folder is already open elsewhere.
+    let windows = [window("w-2", None), window("main", Some("/a"))];
+    assert_eq!(
+        route(&windows, &folder("/a")),
+        Route::Existing("main".into())
+    );
+}
+
+#[test]
+fn the_window_in_front_is_the_one_chosen_when_two_would_do() {
+    let windows = [window("w-1", Some("/a/x")), window("main", Some("/a"))];
+    assert_eq!(
+        route(&windows, &note_at("/a/x/n.md")),
+        Route::Existing("w-1".into())
+    );
+}
+
+#[test]
+fn a_quit_is_over_when_every_window_has_answered() {
+    let quit = Quit::default();
+    assert!(quit.begin(["main".to_string(), "w-1".to_string()]));
+    assert_eq!(quit.answered("w-1"), Quitting::Waiting);
+    assert_eq!(quit.answered("main"), Quitting::Done);
+}
+
+#[test]
+fn a_window_answering_twice_does_not_finish_the_quit_early() {
+    let quit = Quit::default();
+    quit.begin(["main".to_string(), "w-1".to_string()]);
+    assert_eq!(quit.answered("main"), Quitting::Waiting);
+    assert_eq!(quit.answered("main"), Quitting::Waiting);
+    assert_eq!(quit.answered("w-1"), Quitting::Done);
+}
+
+#[test]
+fn an_answer_with_no_quit_asked_for_is_not_a_quit() {
+    assert_eq!(Quit::default().answered("main"), Quitting::Idle);
+}
+
+#[test]
+fn a_second_quit_while_one_is_under_way_is_ignored() {
+    let quit = Quit::default();
+    assert!(quit.begin(["main".to_string()]));
+    assert!(!quit.begin(["main".to_string()]));
+}
+
+const SCREENS: [Screen; 2] = [
+    Screen {
+        x: 0.0,
+        y: 0.0,
+        width: 1440.0,
+        height: 900.0,
+    },
+    Screen {
+        x: -1920.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    },
+];
+
+fn frame(x: i32, y: i32, width: u32, height: u32) -> Frame {
+    Frame {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+#[test]
+fn a_window_is_put_back_where_it_was() {
+    assert!(usable_frame(&frame(100, 80, 800, 600), &SCREENS));
+    // On the second display, at negative x.
+    assert!(usable_frame(&frame(-1500, 100, 800, 600), &SCREENS));
+}
+
+/// The display it was on is no longer attached.
+#[test]
+fn a_window_that_would_be_off_every_screen_is_not_put_there() {
+    assert!(!usable_frame(&frame(3000, 100, 800, 600), &SCREENS[..1]));
+    assert!(!usable_frame(&frame(-1500, 100, 800, 600), &SCREENS[..1]));
+    assert!(!usable_frame(&frame(100, 5000, 800, 600), &SCREENS));
+    assert!(!usable_frame(&frame(100, 80, 800, 600), &[]));
+}
+
+#[test]
+fn a_window_too_small_or_too_big_to_use_is_not_put_back() {
+    assert!(!usable_frame(&frame(100, 80, 20, 20), &SCREENS));
+    assert!(!usable_frame(&frame(100, 80, 9000, 600), &SCREENS));
+}
+
+#[test]
+fn a_window_whose_corner_is_hanging_off_the_edge_is_not_put_back() {
+    // Its top-left is on the screen, but only just: nothing of it to grab.
+    assert!(!usable_frame(&frame(1430, 100, 800, 600), &SCREENS[..1]));
+}
+
+#[test]
+fn the_saved_windows_are_read_back_without_the_ones_that_are_gone() {
+    let here = tempfile::tempdir().unwrap();
+    let json = format!(
+        r#"[{{"root":{:?},"frame":{{"x":10,"y":20,"width":800,"height":600}}}},
+            {{"root":"/definitely/not/here","frame":null}}]"#,
+        here.path().to_string_lossy()
+    );
+    let saved = read_saved(json.as_bytes());
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].frame, Some(frame(10, 20, 800, 600)));
+}
+
+#[test]
+fn a_damaged_record_of_the_windows_is_no_windows() {
+    assert!(read_saved(b"not json").is_empty());
+    assert!(read_saved(b"{\"root\": 3}").is_empty());
+    assert!(read_saved(b"").is_empty());
+}
+
+fn saved(root: &str) -> SavedWindow {
+    SavedWindow {
+        root: root.to_string(),
+        frame: None,
+    }
+}
+
+#[test]
+fn the_first_saved_window_starts_the_app_and_the_rest_open_beside_it() {
+    let (first, others) = plan_restore(vec![saved("/a"), saved("/b"), saved("/c")], None);
+    assert_eq!(first, Some(saved("/a")));
+    assert_eq!(others, [saved("/b"), saved("/c")]);
+}
+
+#[test]
+fn nothing_saved_is_nothing_to_restore() {
+    assert_eq!(plan_restore(vec![], None), (None, vec![]));
+}
+
+/// Started with `nuza ~/b`: that window is the first, and the one that was
+/// already on `~/b` is not opened again.
+#[test]
+fn an_app_started_on_a_folder_keeps_the_others_but_not_that_one() {
+    let (first, others) = plan_restore(
+        vec![saved("/a"), saved("/b"), saved("/c")],
+        Some(&folder("/b")),
+    );
+    assert_eq!(first, None);
+    assert_eq!(others, [saved("/a"), saved("/c")]);
+}
+
+#[test]
+fn an_app_started_on_a_note_does_not_open_its_vault_twice() {
+    let (first, others) = plan_restore(
+        vec![saved("/a"), saved("/b")],
+        Some(&note_at("/b/deep/n.md")),
+    );
+    assert_eq!(first, None);
+    assert_eq!(others, [saved("/a")]);
+}
+
+/// A window with a launch target waiting for it is as good as on that folder.
+#[test]
+fn launch_targets_are_held_per_window() {
+    let launches = crate::state::LaunchTarget::default();
+    launches.queue("main", folder("/a"));
+    launches.queue("w-1", folder("/b"));
+
+    assert_eq!(launches.pending("w-1"), Some(folder("/b")));
+    assert_eq!(launches.take("w-1"), Some(folder("/b")));
+    assert_eq!(launches.take("w-1"), None, "it is handed over once");
+    assert_eq!(launches.take("main"), Some(folder("/a")));
+}
+
+#[test]
+fn the_folder_a_window_has_open_is_told_without_making_a_vault() {
+    let windows = Windows::default();
+    assert_eq!(windows.root("main"), None);
+
+    let dir = tempfile::tempdir().unwrap();
+    *locked(&windows.vault("main").root) = Some(dir.path().to_path_buf());
+    assert_eq!(windows.root("main"), Some(dir.path().to_path_buf()));
+    assert_eq!(windows.root("w-1"), None);
 }

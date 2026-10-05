@@ -19,7 +19,7 @@ pub struct OpenTarget {
 
 /// A path without the `\\?\` that canonicalising puts on one in Windows,
 /// which nothing else in the app writes and so would never match the tree.
-fn plain(path: PathBuf) -> String {
+pub(crate) fn plain(path: PathBuf) -> String {
     let text = path.to_string_lossy().into_owned();
     match text.strip_prefix(r"\\?\") {
         Some(rest) if !rest.starts_with("UNC") => rest.to_string(),

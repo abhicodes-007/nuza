@@ -5,6 +5,7 @@ use crate::tasks::{off_thread, wait_for_picker};
 use crate::tree::{list_folder as list_one_folder, FileEntry, PATIENCE};
 use crate::watcher::watch_vault;
 use std::path::Path;
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
 #[derive(serde::Serialize)]
@@ -70,6 +71,9 @@ pub(crate) async fn load_folder_picker(
                 Some(path) => adopt_folder(&scope, path.to_string()).map(Some),
                 None => Ok(None),
             };
+            if matches!(result, Ok(Some(_))) {
+                crate::multiwindow::changed(scope.app_handle());
+            }
             send(result);
         });
     })
@@ -82,7 +86,14 @@ pub(crate) async fn open_folder(
     window: tauri::WebviewWindow,
     path: String,
 ) -> Result<OpenedFolder, String> {
-    off_thread(move || adopt_folder(&window, path)).await
+    off_thread(move || {
+        let opened = adopt_folder(&window, path)?;
+        // Which folders are open is what comes back next time, and what the
+        // Window menu lists.
+        crate::multiwindow::changed(window.app_handle());
+        Ok(opened)
+    })
+    .await
 }
 
 /// What is directly inside a folder of the open vault, for the sidebar to fill

@@ -1,4 +1,4 @@
-use crate::state::{locked, LaunchTarget};
+use crate::state::LaunchTarget;
 use std::path::PathBuf;
 use tauri::Manager;
 
@@ -9,11 +9,12 @@ pub(crate) const OPEN_TARGET_EVENT: &str = "open-target";
 /// Announced when a note has changed underneath the app, carrying its path.
 pub(crate) const FILE_CHANGED_EVENT: &str = "file-changed";
 
-/// The note or folder the app was started on from a terminal, once: the
-/// window asks as it comes up, and a second ask finds nothing.
+/// The note or folder this window was started on - from a terminal, or because
+/// it was opened for a path - once: the window asks as it comes up, and a
+/// second ask finds nothing. Each window is asked for by its own label.
 #[tauri::command]
-pub(crate) fn take_launch_target(app_handle: tauri::AppHandle) -> Option<crate::cli::OpenTarget> {
-    locked(&app_handle.state::<LaunchTarget>().0).take()
+pub(crate) fn take_launch_target(window: tauri::WebviewWindow) -> Option<crate::cli::OpenTarget> {
+    window.state::<LaunchTarget>().take(window.label())
 }
 
 /// The program as the user would start it: the AppImage itself when that is
