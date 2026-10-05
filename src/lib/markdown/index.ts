@@ -14,8 +14,11 @@ import { attachments } from "./attachments";
 import { listIndent } from "./listIndent";
 import { continueListItem, insertNewLine } from "./lists";
 import { liveMarkdownPreview } from "./livePreview";
+import { MathSyntax } from "./math";
 import { findInNote } from "./searchPanel";
 import { noteDirectory } from "./sources";
+import { headingFlash, jumpToHeading } from "./headings";
+import { Tag } from "./tags";
 import { WikiLink, followWikiLink } from "./wikiLinks";
 import { nuzaEditorTheme } from "./theme";
 
@@ -35,7 +38,23 @@ const openLinkOnModClick = EditorView.domEventHandlers({
     const wiki = target?.closest<HTMLElement>("[data-wikilink]")?.dataset.wikilink;
     if (wiki !== undefined) {
       event.preventDefault();
-      followWikiLink({ target: wiki, fromDirectory: view.state.facet(noteDirectory) });
+      const heading =
+        target?.closest<HTMLElement>("[data-wikilink-heading]")?.dataset.wikilinkHeading ?? null;
+      followWikiLink({ target: wiki, heading, fromDirectory: view.state.facet(noteDirectory) });
+      return true;
+    }
+
+    // `[text](#heading)`: a heading further up or down this note.
+    const anchor = target?.closest<HTMLElement>("[data-anchor]")?.dataset.anchor;
+    if (anchor !== undefined) {
+      event.preventDefault();
+      let heading = anchor;
+      try {
+        heading = decodeURIComponent(anchor);
+      } catch {
+        // A stray `%` is not valid percent-encoding; use it as written.
+      }
+      if (!jumpToHeading(view, heading)) report(`There's no heading "${heading}" in this note`);
       return true;
     }
 
@@ -79,11 +98,12 @@ export const liveMarkdown: Extension = [
   // `codeLanguages` is what gives a fenced block its own colours. Each grammar
   // is fetched the first time a block asks for it, so a note that never shows
   // code never pays for one.
-  markdown({ extensions: [GFM, WikiLink], codeLanguages: languages, addKeymap: false }),
+  markdown({ extensions: [GFM, WikiLink, Tag, MathSyntax], codeLanguages: languages, addKeymap: false }),
   markdownEditingKeymap,
   EditorView.lineWrapping,
   nuzaEditorTheme,
   liveMarkdownPreview,
+  headingFlash,
   findInNote,
   listIndent,
   openLinkOnModClick,

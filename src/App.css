@@ -14,6 +14,14 @@
 @import "tailwindcss";
 
 /*
+ * `compact:` applies a utility only while compact mode is on, which is a
+ * `data-compact` attribute on the root (see App.tsx). It is a variant rather
+ * than a pile of overrides here so the tighter value sits next to the roomy
+ * one it replaces, in the component it belongs to.
+ */
+@custom-variant compact (:root[data-compact] &);
+
+/*
  * The defaults, so the window is painted before any JavaScript has run. From
  * then on these are overwritten on the root element by the appearance hook.
  */
@@ -264,6 +272,25 @@ textarea,
   }
 }
 
+/*
+ * The vault menu grows out of the pill it sits on and folds back into it: more
+ * travel than the other panels, from the pill's own left edge, so it reads as
+ * opening from that button and not as something dropped in above it.
+ */
+@keyframes nuza-vault-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+
+@keyframes nuza-vault-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
+
 @keyframes nuza-rise-out {
   to {
     opacity: 0;
@@ -329,6 +356,16 @@ textarea,
 .animate-rise-out {
   animation: nuza-rise-out 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
   transform-origin: bottom center;
+}
+
+.animate-vault-in {
+  animation: nuza-vault-in 190ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: bottom left;
+}
+
+.animate-vault-out {
+  animation: nuza-vault-out 130ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  transform-origin: bottom left;
 }
 
 .animate-palette-out {
@@ -525,7 +562,70 @@ textarea,
     opacity 220ms ease;
 }
 
+/* The heading a link has just brought you to, which settles back into the page. */
+.cm-md-flash {
+  animation: nuza-flash 1.4s ease-out;
+}
+
+@keyframes nuza-flash {
+  from {
+    background-color: var(--nuza-accent-wash);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+/* An image from a note, shown large over the window. It fades and settles in
+   and out the same way, and a click or Escape puts it away. */
+.nuza-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vmin;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.nuza-lightbox-open {
+  opacity: 1;
+}
+
+.nuza-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 0.5rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  transform: scale(0.97);
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nuza-lightbox-open img {
+  transform: none;
+}
+
+.nuza-lightbox-broken {
+  color: var(--nuza-muted);
+  font-style: italic;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .nuza-lightbox,
+  .nuza-lightbox img {
+    transition: none;
+  }
+
+  .cm-md-flash {
+    animation: none;
+    background-color: var(--nuza-accent-wash);
+  }
+
   .animate-fade-in,
   .animate-panel-in,
   .animate-menu-in,
@@ -536,6 +636,8 @@ textarea,
   .animate-fade-out,
   .animate-panel-out,
   .animate-palette-out,
+  .animate-vault-in,
+  .animate-vault-out,
   .animate-rise-out {
     animation: none;
   }

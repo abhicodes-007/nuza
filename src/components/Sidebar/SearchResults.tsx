@@ -10,6 +10,8 @@ interface SearchResultsProps {
   matches: FileMatch[];
   /** Lines in the notes' text that hold the query, listed after the file names. */
   contentHits: ContentHit[];
+  /** Why the search could not be run, such as a pattern that is not one. */
+  error?: string | null;
   rootPath: string;
   /** Counts through the file matches first, then the content hits. */
   activeIndex: number;
@@ -22,6 +24,7 @@ interface SearchResultsProps {
 export default function SearchResults({
   matches,
   contentHits,
+  error,
   rootPath,
   activeIndex,
   currentFile,
@@ -36,13 +39,17 @@ export default function SearchResults({
     listRef.current?.querySelectorAll("[data-result]")[activeIndex]?.scrollIntoView({ block: "nearest" });
   }, [activeIndex]);
 
+  if (error) {
+    return <p className="animate-fade-in mt-6 text-center text-xs text-zinc-500">{error}</p>;
+  }
+
   if (matches.length === 0 && contentHits.length === 0) {
     return <p className="animate-fade-in mt-6 text-center text-xs text-zinc-600">No files match.</p>;
   }
 
   const rowClass = (index: number, path: string) =>
     cn(
-      "flex w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+      "flex w-full cursor-pointer rounded-md px-2 py-1.5 text-left text-sm transition-colors compact:py-0.5",
       index === activeIndex ? "bg-zinc-800 text-white" : currentFile === path ? "text-white" : "text-zinc-400"
     );
 

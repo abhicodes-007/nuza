@@ -8,6 +8,11 @@ import { FileEntry } from "./types";
  * disk - a re-read costs a walk of every directory and a fresh copy of the
  * whole tree across the process boundary, for a result that differs in one
  * entry.
+ *
+ * The tree is read a folder at a time: a folder with no `children` has not been
+ * read yet, which is not the same as one with nothing in it. An edit under a
+ * folder that has not been read is left alone - the folder will show it when it
+ * is read, which is when somebody asks to see inside it.
  */
 
 /** The separator the host is already using, inferred from the path itself. */
@@ -53,6 +58,8 @@ function inOrder(entries: FileEntry[]) {
  * Replaces the children of the directory at `path`. Only the branch leading to
  * it is rebuilt; every other subtree is carried over by reference, so a change
  * deep in the tree leaves the rest of it untouched for React to skip over.
+ * A directory that has not been read is not changed, and nor is anything
+ * below it - there is nothing of it here to change.
  */
 function updateDirectory(
   nodes: FileEntry[],
@@ -60,10 +67,35 @@ function updateDirectory(
   change: (children: FileEntry[]) => FileEntry[]
 ): FileEntry[] {
   return nodes.map((node) => {
-    if (!node.isDirectory || !isWithin(path, node.path)) return node;
-    if (node.path === path) return { ...node, children: change(node.children ?? []) };
-    return { ...node, children: updateDirectory(node.children ?? [], path, change) };
+    if (!node.isDirectory || !node.children || !isWithin(path, node.path)) return node;
+    if (node.path === path) return { ...node, children: change(node.children) };
+    return { ...node, children: updateDirectory(node.children, path, change) };
   });
+}
+
+/**
+ * Fills in the folder at `path` with what was read of it - the folder opened
+ * for the first time, or opened again to look for what it could not answer for.
+ */
+export function setChildren(tree: FileEntry[], rootPath: string, path: string, children: FileEntry[]) {
+  if (path === rootPath) return children;
+  const update = (nodes: FileEntry[]): FileEntry[] =>
+    nodes.map((node) => {
+      if (!node.isDirectory || !isWithin(path, node.path)) return node;
+      if (node.path === path) return { ...node, children };
+      return node.children ? { ...node, children: update(node.children) } : node;
+    });
+  return update(tree);
+}
+
+/** Whether a folder has been read, or only listed. */
+export function isRead(entry: FileEntry) {
+  return !!entry.children;
+}
+
+/** Whether any row of a folder's own is one the filesystem could not answer for. */
+export function hasUnavailable(entry: FileEntry) {
+  return !!entry.children?.some((child) => child.unavailable);
 }
 
 /** The entry at `path`, or null if the tree has no such row. */

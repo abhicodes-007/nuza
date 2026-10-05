@@ -88,6 +88,16 @@ export function useDocuments({
   const [viewGeneration, setViewGeneration] = useState(0);
   const currentPath = useRef(initialPath);
   /**
+   * The split: a second editor beside the first, showing one note of its own.
+   * A note is in one pane at a time, so every document still has exactly one
+   * live state - in whichever view is showing it, or parked in `states`.
+   */
+  const sideContainer = useRef<HTMLDivElement>(null);
+  const sideEditor = useRef<EditorView | null>(null);
+  const [sideView, setSideView] = useState<EditorView | null>(null);
+  const sidePathRef = useRef<string | null>(null);
+  const [sidePath, setSidePath] = useState<string | null>(null);
+  /**
    * Only ever the text the editor was first mounted with. The first document
    * has to be created with its content rather than opened with it: `open`
    * parks the live state under its own path on the way past, which for the
@@ -115,7 +125,11 @@ export function useDocuments({
   const evict = useCallback(() => {
     const open = new Set(latestOpen.current);
     const keep = (path: string) =>
-      path === currentPath.current || path === initialPath || open.has(path) || latestDirty.current.has(path);
+      path === currentPath.current ||
+      path === sidePathRef.current ||
+      path === initialPath ||
+      open.has(path) ||
+      latestDirty.current.has(path);
 
     for (const path of documentsToEvict(states.current.keys(), keep)) states.current.delete(path);
   }, [initialPath]);
@@ -192,18 +206,22 @@ export function useDocuments({
   const trackEdits = useRef<Extension>(null);
   if (!trackEdits.current) {
     trackEdits.current = EditorView.updateListener.of((update) => {
+      // The footer counts the main pane's note; the split's edits are the
+      // note's own business, and only have to be known about as unsaved.
+      const inSide = update.view === sideEditor.current;
+
       // Carry the word count across the edit rather than counting again: only
       // the lines it touched are looked at.
       const counted = tally.current;
-      if (update.docChanged && counted?.doc === update.startState.doc) {
+      if (!inSide && update.docChanged && counted?.doc === update.startState.doc) {
         const next = recount(counted.doc, update.state.doc, update.changes, counted);
         tally.current = { doc: update.state.doc, ...next };
       }
       if (update.docChanged && !swapping.current) {
-        const path = currentPath.current;
-        setDirtyPaths((paths) => (paths.has(path) ? paths : new Set(paths).add(path)));
+        const path = inSide ? sidePathRef.current : currentPath.current;
+        if (path) setDirtyPaths((paths) => (paths.has(path) ? paths : new Set(paths).add(path)));
       }
-      if (update.docChanged || update.selectionSet) reportStats(update.state);
+      if (!inSide && (update.docChanged || update.selectionSet)) reportStats(update.state);
     });
   }
 
@@ -253,6 +271,7 @@ export function useDocuments({
   useEffect(() => {
     latestSettings.current = settings;
     editor.current?.dispatch({ effects: preferences.reconfigure(settings) });
+    sideEditor.current?.dispatch({ effects: preferences.reconfigure(settings) });
   }, [settings]);
 
   // Opening a folder changes where the open note files its attachments, and
@@ -260,7 +279,88 @@ export function useDocuments({
   useEffect(() => {
     latestVault.current = vault;
     editor.current?.dispatch({ effects: location.reconfigure(placeOf(currentPath.current, vault)) });
+    if (sidePathRef.current) {
+      sideEditor.current?.dispatch({ effects: location.reconfigure(placeOf(sidePathRef.current, vault)) });
+    }
   }, [vault]);
+
+  /** Puts the split's live state away in `states`, as the main pane's is on a swap. */
+  const parkSide = useCallback(() => {
+    const view = sideEditor.current;
+    const path = sidePathRef.current;
+    if (view && path) {
+      states.current.delete(path);
+      states.current.set(path, view.state);
+    }
+  }, []);
+
+  // The split's editor lives for as long as the split is open - not per note,
+  // so that a rename, which only changes the path, does not rebuild it from a
+  // parked copy of the text that has since moved on.
+  const hasSide = sidePath !== null;
+  useLayoutEffect(() => {
+    const parent = sideContainer.current;
+    const path = sidePathRef.current;
+    const state = path ? states.current.get(path) : undefined;
+    if (!hasSide || !parent || !state) return;
+
+    const view = new EditorView({ state, parent });
+    sideEditor.current = view;
+    setSideView(view);
+    view.focus();
+
+    return () => {
+      view.destroy();
+      sideEditor.current = null;
+      setSideView(null);
+    };
+  }, [hasSide]);
+
+  /**
+   * Shows `path` in the split, beside the note in the main pane, creating its
+   * document from `content` if it has none yet. Whatever the split showed is
+   * put away as the main pane's note is on a swap. Returns false for the note
+   * the main pane is showing: it cannot be in both.
+   */
+  const openSide = useCallback(
+    (path: string, content: string | null) => {
+      if (path === currentPath.current) return false;
+      if (content === null && !states.current.has(path)) {
+        throw new Error(`openSide(${path}) with no content and no document in memory`);
+      }
+
+      parkSide();
+      const next = stateFor(path, content ?? "");
+      states.current.delete(path);
+      states.current.set(path, next);
+      sidePathRef.current = path;
+
+      const view = sideEditor.current;
+      if (view) {
+        swapping.current = true;
+        view.setState(next);
+        view.dispatch({
+          effects: [
+            preferences.reconfigure(latestSettings.current),
+            location.reconfigure(placeOf(path, latestVault.current)),
+          ],
+        });
+        swapping.current = false;
+        view.focus();
+      }
+      setSidePath(path);
+      evict();
+      return true;
+    },
+    [stateFor, parkSide, evict]
+  );
+
+  /** Closes the split. Its note is kept, with its edits, as a closed tab's is. */
+  const closeSide = useCallback(() => {
+    parkSide();
+    sidePathRef.current = null;
+    setSidePath(null);
+  }, [parkSide]);
 
   /**
    * Shows `path`, creating its document from `content` if it has none yet.
@@ -279,6 +379,10 @@ export function useDocuments({
       if (content === null && !states.current.has(path)) {
         throw new Error(`open(${path}) with no content and no document in memory`);
       }
+
+      // A note in the split that is asked for here moves across: it is parked
+      // as it stands, and the split closes behind it.
+      if (path === sidePathRef.current) closeSide();
 
       swapping.current = true;
       // The live state lives in the view, not the map, so park it before it is
@@ -306,7 +410,7 @@ export function useDocuments({
       // rather than leaving the sidebar holding focus.
       view.focus();
     },
-    [stateFor, reportStats, evict]
+    [stateFor, reportStats, evict, closeSide]
   );
 
   /**
@@ -321,14 +425,19 @@ export function useDocuments({
   const replace = useCallback(
     (path: string, content: string) => {
       const showing = path === currentPath.current;
-      const previous = showing ? editor.current?.state : states.current.get(path);
+      const inSide = !showing && path === sidePathRef.current;
+      const previous = showing
+        ? editor.current?.state
+        : inSide
+          ? sideEditor.current?.state
+          : states.current.get(path);
       const anchor = Math.min(previous?.selection.main.anchor ?? 0, content.length);
 
       states.current.delete(path);
       const next = stateFor(path, content, anchor);
 
-      const view = editor.current;
-      if (!showing || !view) return;
+      const view = inSide ? sideEditor.current : editor.current;
+      if ((!showing && !inSide) || !view) return;
 
       // The swap is not an edit, and must not mark the note dirty - it is the
       // opposite: the note has just caught up with the file.
@@ -341,6 +450,8 @@ export function useDocuments({
         ],
       });
       swapping.current = false;
+      // The split has no Vim adapter to rebuild and no footer to update.
+      if (inSide) return;
       setViewGeneration((generation) => generation + 1);
       reportStats(view.state);
     },
@@ -350,18 +461,29 @@ export function useDocuments({
   /** The path of the document the editor is showing right now. */
   const showing = useCallback(() => currentPath.current, []);
 
+  /** The path of the note the split is showing, or null with no split. */
+  const showingSide = useCallback(() => sidePathRef.current, []);
+
   /** Whether `path` has already been read off disk. */
   const isOpen = useCallback((path: string) => states.current.has(path), []);
+
+  /** The state of `path` as it stands: in the view showing it, or put away. */
+  const liveState = useCallback(
+    (path: string) =>
+      path === currentPath.current
+        ? editor.current?.state
+        : path === sidePathRef.current
+          ? sideEditor.current?.state
+          : states.current.get(path),
+    []
+  );
 
   /**
    * The document as text. This is the one operation that costs something in
    * proportion to the document's length, which is why it is only ever called
    * when the content has to leave the editor.
    */
-  const read = useCallback((path: string) => {
-    const state = path === currentPath.current ? editor.current?.state : states.current.get(path);
-    return state?.doc.toString() ?? "";
-  }, []);
+  const read = useCallback((path: string) => liveState(path)?.doc.toString() ?? "", [liveState]);
 
   /**
    * A handle on the document as it stands, for a save to hold on to. The text
@@ -370,10 +492,7 @@ export function useDocuments({
    * what the editor holds, rather than clearing the dirty flag over a
    * keystroke that arrived while the write was in flight.
    */
-  const revision = useCallback((path: string) => {
-    const state = path === currentPath.current ? editor.current?.state : states.current.get(path);
-    return state?.doc ?? null;
-  }, []);
+  const revision = useCallback((path: string) => liveState(path)?.doc ?? null, [liveState]);
 
   const markSaved = useCallback((path: string) => {
     setDirtyPaths((paths) => {
@@ -386,6 +505,12 @@ export function useDocuments({
 
   /** Throws away every document matching `matches`, e.g. after a delete. */
   const forget = useCallback((matches: (path: string) => boolean) => {
+    // A note that is gone cannot stay in the split. Nothing is parked: what is
+    // being forgotten is the point.
+    if (sidePathRef.current && matches(sidePathRef.current)) {
+      sidePathRef.current = null;
+      setSidePath(null);
+    }
     for (const path of Array.from(states.current.keys())) {
       if (matches(path)) states.current.delete(path);
     }
@@ -404,6 +529,16 @@ export function useDocuments({
       states.current.set(renamed, state);
     }
 
+    const side = sidePathRef.current;
+    if (side && rename(side) !== side) {
+      const renamed = rename(side);
+      sidePathRef.current = renamed;
+      setSidePath(renamed);
+      sideEditor.current?.dispatch({
+        effects: location.reconfigure(placeOf(renamed, latestVault.current)),
+      });
+    }
+
     const current = rename(currentPath.current);
     if (current !== currentPath.current) {
       currentPath.current = current;
@@ -418,6 +553,12 @@ export function useDocuments({
   return {
     container,
     view,
+    sideContainer,
+    sideView,
+    sidePath,
+    openSide,
+    closeSide,
+    showingSide,
     viewGeneration,
     dirtyPaths,
     subscribeToStats,

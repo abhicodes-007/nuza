@@ -1,6 +1,6 @@
 [package]
 name = "nuza"
-version = "0.2.0"
+version = "0.3.0"
 description = "A fast, privacy-first, local-first markdown notes app"
 authors = ["puang59"]
 edition = "2021"
@@ -36,6 +36,9 @@ tempfile = "3"
 # Notices a note being changed underneath the app - by a sync client, a
 # git checkout, or another editor.
 notify = "8"
+# The content search's regular-expression mode. Already compiled into the app
+# by tauri; this asks for it by name.
+regex = "1"
 # Deleting a note puts it in the Trash, the Recycle Bin or the XDG trash
 # rather than unlinking it - the app has no undo, and the OS does.
 trash = "5"
@@ -48,6 +51,11 @@ tauri-utils = "2"
 # `oneshot`, so a command waiting on a file dialog yields its thread rather
 # than parking it for as long as the dialog is open - see `wait_for_picker`.
 tokio = { version = "1", features = ["sync"] }
+
+# `nuza <path>` while the app is already open hands the path to the open
+# window rather than starting a second one. Desktop only, like the command.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
 
 # A rename that refuses to replace what is already there. Every platform has
 # one and none of them is `fs::rename`, which is why these are here.
@@ -64,6 +72,13 @@ windows-sys = { version = "0.61", features = [
   "Win32_Storage_FileSystem",
 ] }
 
+
+# A window without a screen, so a test can stand two of them up and check that
+# what one opens is not what the other sees. Test builds only, and not on
+# Windows: a test executable there has no application manifest, and with the
+# webview linked in it fails to start (STATUS_ENTRYPOINT_NOT_FOUND).
+[target.'cfg(not(windows))'.dev-dependencies]
+tauri = { version = "2", features = ["test"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

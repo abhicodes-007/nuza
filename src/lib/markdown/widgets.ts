@@ -3,7 +3,9 @@ import { EditorView, WidgetType } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 import { areaField, refresh, textField } from "./fields";
 import { Property, frontmatterRange, readFrontmatter } from "./frontmatter";
+import { DEFAULT_EDITOR_FONT_SIZE } from "../fonts";
 import { renderHtml } from "./sanitize";
+import { showLightbox } from "./lightbox";
 import { safeExternalHref } from "./sources";
 import { showPopupMenu } from "./popupMenu";
 import {
@@ -201,6 +203,64 @@ export class HtmlWidget extends WidgetType {
   }
 }
 
+/**
+ * KaTeX is the largest thing the editor can ask for, and most notes have no
+ * math in them, so it is fetched the first time a note shows some.
+ */
+let katex: Promise<typeof import("katex").default> | null = null;
+
+function loadKatex() {
+  katex ??= import("katex").then((module) => module.default);
+  return katex;
+}
+
+/**
+ * TeX drawn as the math it stands for. Rendered as MathML, which the webviews
+ * nuza runs in all draw themselves: that needs none of KaTeX's stylesheet or
+ * fonts, so the app does not grow by a megabyte of typefaces for it.
+ */
+export class MathWidget extends WidgetType {
+  constructor(
+    readonly tex: string,
+    readonly block: boolean
+  ) {
+    super();
+  }
+
+  eq(other: MathWidget) {
+    return other.tex === this.tex && other.block === this.block;
+  }
+
+  toDOM(view: EditorView) {
+    const wrapper = document.createElement(this.block ? "div" : "span");
+    wrapper.className = this.block ? "cm-md-math cm-md-math-block" : "cm-md-math";
+    // The source stands in for the few milliseconds the first render takes.
+    wrapper.textContent = this.tex;
+
+    loadKatex().then(
+      (renderer) => {
+        wrapper.textContent = "";
+        renderer.render(this.tex, wrapper, {
+          displayMode: this.block,
+          output: "mathml",
+          throwOnError: false,
+        });
+        // A block changes height when it is drawn; the editor has to hear it.
+        view.requestMeasure();
+      },
+      () => {
+        // The chunk did not load: the source it already shows is the fallback.
+      }
+    );
+    return wrapper;
+  }
+
+  /** Clicking rendered math should put the caret in the TeX behind it. */
+  ignoreEvent() {
+    return false;
+  }
+}
+
 /** `***` / `---` drawn as the rule it stands for. */
 export class RuleWidget extends WidgetType {
   eq() {
@@ -259,6 +319,53 @@ export class ImageWidget extends WidgetType {
   }
 }
 
+/**
+ * A small picture after a link to an image in the vault, which opens it large
+ * when clicked. The link's own text is left as it is: this sits beside it, so
+ * the note still reads the way it was written.
+ */
+export class LinkThumbnailWidget extends WidgetType {
+  constructor(
+    readonly src: string,
+    readonly alt: string
+  ) {
+    super();
+  }
+
+  eq(other: LinkThumbnailWidget) {
+    return other.src === this.src && other.alt === this.alt;
+  }
+
+  toDOM() {
+    const wrapper = document.createElement("span");
+    wrapper.className = "cm-md-link-thumb";
+    wrapper.title = this.alt ? `Preview ${this.alt}` : "Preview";
+
+    const image = document.createElement("img");
+    image.src = this.src;
+    image.alt = this.alt;
+    image.loading = "lazy";
+
+    const reveal = () => wrapper.classList.add("cm-md-link-thumb-loaded");
+    image.addEventListener("load", reveal);
+    // A picture that is not there is not worth a hole in the line.
+    image.addEventListener("error", () => wrapper.remove());
+    if (image.complete) reveal();
+
+    wrapper.appendChild(image);
+    wrapper.addEventListener("click", (event) => {
+      event.preventDefault();
+      showLightbox(this.src, this.alt);
+    });
+    return wrapper;
+  }
+
+  /** The click is the thumbnail's: it must not also put the caret in the line. */
+  ignoreEvent() {
+    return true;
+  }
+}
+
 export type TableAlignment = "left" | "center" | "right" | null;
 
 export type TableCell = {
@@ -276,6 +383,31 @@ export type TableRow = {
   header: boolean;
 };
 
+/**
+ * How tall a rendered table is likely to be, in pixels, worked out from the
+ * metrics in `.cm-md-table` (theme.ts) rather than measured.
+ *
+ * The editor places everything below a table by the height it believes the
+ * table has, and only learns the real one once the table has been drawn in
+ * the viewport. Left to guess, it sizes the block by the lines of source it
+ * replaces - which is one row out, ignores the cell padding and the "add row"
+ * button under the table, and is wrong by more with every row. A guess close
+ * enough to the real height is what keeps the page from jumping when the
+ * table above the viewport is measured. Cells whose text wraps make the real
+ * table taller than this; that is the remaining jump, and it is the smaller.
+ */
+export function estimateTableHeight(rowCount: number, fontSize = DEFAULT_EDITOR_FONT_SIZE) {
+  // The table's own font is 0.94em, so its line and its cell padding are too.
+  const row = 0.94 * (1.5 + 2 * 0.4);
+  // Top and bottom padding of the wrapper.
+  const wrapper = 2 * 0.5;
+  // The add-row button: 0.85em type at the editor's 1.75 line height, its own
+  // vertical padding, and the margin above it.
+  const add = 0.85 * (1.75 + 2 * 0.16 + 0.35);
+  // The collapsed borders are a pixel a row, and one more under the last.
+  return Math.round((wrapper + add + row * rowCount) * fontSize + rowCount + 1);
+}
+
 /** A GFM table drawn as an actual table, with cells that are click-to-edit. */
 export class TableWidget extends WidgetType {
   constructor(
@@ -289,6 +421,10 @@ export class TableWidget extends WidgetType {
 
   eq(other: TableWidget) {
     return other.key === this.key;
+  }
+
+  get estimatedHeight() {
+    return estimateTableHeight(this.rows.length);
   }
 
   /** Where a cell's source sits right now, read back through the widget's own DOM. */

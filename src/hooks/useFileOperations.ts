@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { FileEntry } from "@/lib/types";
@@ -12,21 +11,28 @@ import {
   joinPath,
   moveEntry as moveTreeEntry,
   removeEntry,
+  setChildren,
 } from "@/lib/fileTree";
 import { report } from "@/lib/notices";
+import { listenHere } from "@/lib/windowEvents";
 import { readScratch, writeScratch } from "@/lib/scratch";
 import { readSession, writeSession } from "@/lib/session";
 import { ATTACHMENT_EVENT, announceAttachment, fileNameOf, writeMedia } from "@/lib/media";
 import { isWithin, rewritePath } from "@/lib/path";
 import { ClosedTab, placeAt, rememberClosed } from "@/lib/closedTabs";
 import { moveTab } from "@/lib/tabOrder";
+import { OpenTarget, planOpen } from "@/lib/launchTarget";
+import { jumpToHeading } from "@/lib/markdown/headings";
 import { WIKI_LINK_EVENT, WikiLinkRequest, resolveWikiLink } from "@/lib/markdown/wikiLinks";
 import { useDocuments } from "./useDocuments";
+import { useFileIndex } from "./useFileIndex";
 
 const UNTITLED_FILE = "untitled.md";
 
 /** Announced by the backend when a note changes underneath the app. */
 const FILE_CHANGED_EVENT = "file-changed";
+/** Matches `OPEN_TARGET_EVENT` in lib.rs. */
+const OPEN_TARGET_EVENT = "open-target";
 
 /**
  * What the backend says when it refuses to write a note that has moved on
@@ -71,6 +77,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const [keptScratch] = useState(readScratch);
   const [currentFile, setCurrentFile] = useState<string>(UNTITLED_FILE);
   const [openPaths, setOpenPaths] = useState<string[]>([UNTITLED_FILE]);
+  /** The note in the split beside the main pane, if there is one. It has no tab. */
+  const [sideFile, setSideFile] = useState<string | null>(null);
   const [folderData, setFolderData] = useState<FileEntry[]>([]);
   const [rootPath, setRootPath] = useState<string | null>(null);
   /**
@@ -91,6 +99,10 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const {
     container: editorContainer,
     view: editorView,
+    sideContainer,
+    sideView,
+    openSide: openSideDocument,
+    closeSide: closeSideDocument,
     viewGeneration,
     dirtyPaths,
     subscribeToStats,
@@ -123,6 +135,11 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const closedRef = useRef<ClosedTab[]>([]);
   const folderDataRef = useRef(folderData);
   folderDataRef.current = folderData;
+  // Every file in the vault, not only those in the folders the sidebar has
+  // opened: what a wiki-link or a closed tab is looked for among.
+  const fileIndex = useFileIndex(rootPath);
+  const fileIndexRef = useRef(fileIndex);
+  fileIndexRef.current = fileIndex;
 
   currentFileRef.current = currentFile;
   rootPathRef.current = rootPath;
@@ -241,12 +258,16 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * what keeps a vault with twenty tabs open as quick to launch as an empty one.
    */
   const restoreSession = useCallback(
-    async (folder: OpenedFolder) => {
+    async (folder: OpenedFolder, focus?: string) => {
       const session = readSession(folder.path);
       // Notes deleted or moved since last time are quietly dropped rather than
       // reopened as tabs onto nothing.
       const open = session.open.filter((path) => findEntry(folder.entries, path));
-      const current = open.includes(session.current) ? session.current : open[0];
+      // A note asked for by name - from a terminal - goes in front of whatever
+      // was open, and joins the tabs if it was not one of them.
+      const asked = focus && findEntry(folder.entries, focus) ? focus : undefined;
+      if (asked && !open.includes(asked)) open.push(asked);
+      const current = asked ?? (open.includes(session.current) ? session.current : open[0]);
 
       try {
         if (!current) throw new Error("nothing to reopen");
@@ -272,7 +293,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
   /** Switches the app over to a folder that has already been read. */
   const adoptFolder = useCallback(
-    (folder: OpenedFolder) => {
+    (folder: OpenedFolder, focus?: string) => {
       setRootPath(folder.path);
       setFolderData(folder.entries);
 
@@ -281,13 +302,14 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       // switch. Forgetting it here is what used to throw it away.
       keepScratch();
       forgetDocuments(() => true);
+      setSideFile(null);
       resetToScratch();
       // The tabs closed in the vault being left are no tabs of this one.
       closedRef.current = [];
 
       sessionVault.current = folder.path;
       sessionReady.current = false;
-      void restoreSession(folder);
+      void restoreSession(folder, focus);
 
       onFolderOpened?.(folder.path);
     },
@@ -318,9 +340,9 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * moved or deleted since it was last opened.
    */
   const openVault = useCallback(
-    async (path: string) => {
+    async (path: string, focus?: string) => {
       try {
-        adoptFolder(await invoke<OpenedFolder>("open_folder", { path }));
+        adoptFolder(await invoke<OpenedFolder>("open_folder", { path }), focus);
         return true;
       } catch (error) {
         // The switcher says its own piece about a vault that has moved, and
@@ -484,7 +506,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * what just arrived.
    */
   useEffect(() => {
-    const listening = listen<string>(FILE_CHANGED_EVENT, async ({ payload: path }) => {
+    const listening = listenHere<string>(FILE_CHANGED_EVENT, async ({ payload: path }) => {
       // Only notes the app is actually holding. Everything else is the
       // sidebar's business, and it is not showing stale text of anything.
       if (!isDocumentOpen(path)) return;
@@ -605,6 +627,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
         if (mine !== selectionRef.current) return;
 
         openDocument(path, content);
+        // A note the split was showing has moved across to this pane.
+        setSideFile((side) => (side === path ? null : side));
 
         // "The next time that note is opened" is this: a tab being switched
         // back to is already holding whatever was typed in it, and only a read
@@ -621,6 +645,45 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     },
     [isDocumentOpen, openDocument, offerRecovered]
   );
+
+  const sideSelectionRef = useRef(0);
+
+  /**
+   * Shows `path` in the split beside the main pane. A note is in one pane at a
+   * time, so one that has a tab leaves it for the split, and the note in the
+   * main pane cannot be sent there at all. What the split showed before is
+   * closed the way a tab is: kept as it stands, and saved if it has edits.
+   */
+  const openToSide = useCallback(
+    async (path: string) => {
+      try {
+        if (path === currentFileRef.current) return;
+
+        const mine = ++sideSelectionRef.current;
+        const firstRead = !isDocumentOpen(path);
+        const content = firstRead ? await invoke<string>("read_file", { path }) : null;
+
+        // Overtaken, or made the main pane's note while it was being read.
+        if (mine !== sideSelectionRef.current || path === currentFileRef.current) return;
+        if (!openSideDocument(path, content)) return;
+
+        if (firstRead) void offerRecovered(path, content ?? "");
+        setSideFile(path);
+        setOpenPaths((paths) => paths.filter((p) => p !== path));
+        recentRef.current = recentRef.current.filter((p) => p !== path);
+      } catch (error) {
+        report(`Couldn't open "${fileNameOf(path)}"`, error);
+      }
+    },
+    [isDocumentOpen, openSideDocument, offerRecovered]
+  );
+
+  const closeSide = useCallback(() => {
+    // Whatever was being read for the split is no longer wanted.
+    sideSelectionRef.current++;
+    closeSideDocument();
+    setSideFile(null);
+  }, [closeSideDocument]);
 
   /**
    * Opens `path` with the caret on `line` (1-based) at `column`, counted in
@@ -683,7 +746,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     const open = new Set(openPathsRef.current);
     let tab: ClosedTab | undefined;
     while ((tab = closedRef.current.pop())) {
-      if (!open.has(tab.path) && findEntry(folderDataRef.current, tab.path)) break;
+      const there = fileIndexRef.current.paths.has(tab.path) || findEntry(folderDataRef.current, tab.path);
+      if (!open.has(tab.path) && there) break;
     }
     if (!tab) return;
 
@@ -740,6 +804,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       recentRef.current = recentRef.current.map(rename);
       closedRef.current = closedRef.current.map((tab) => ({ ...tab, path: rename(tab.path) }));
       if (isWithin(currentFileRef.current, from)) setCurrentFile(rename(currentFileRef.current));
+      setSideFile((side) => (side && isWithin(side, from) ? rename(side) : side));
     },
     [rewriteDocuments]
   );
@@ -784,22 +849,40 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    */
   useEffect(() => {
     async function follow(event: Event) {
-      const { target, fromDirectory } = (event as CustomEvent<WikiLinkRequest>).detail;
+      const { target, heading, fromDirectory } = (event as CustomEvent<WikiLinkRequest>).detail;
       const root = rootPathRef.current;
-      if (!root || !target) return;
+      if (!root) return;
 
-      const notes: string[] = [];
+      // Once the note is open: the heading the link goes on to, if it has one.
+      const goToHeading = (path: string) => {
+        const view = editorView;
+        if (!heading || !view || showingDocument() !== path) return;
+        if (!jumpToHeading(view, heading)) report(`There's no heading "${heading}" in that note`);
+      };
+
+      // `[[#heading]]`: a heading in the note the link is written in.
+      if (!target) {
+        const here = currentFileRef.current;
+        if (heading && here) goToHeading(here);
+        return;
+      }
+
+      // The index knows the whole vault; the tree knows a note made a moment
+      // ago, before the index has heard of it.
+      const known = new Set(fileIndexRef.current.notes);
       const collect = (entries: FileEntry[]) => {
         for (const entry of entries) {
           if (entry.children) collect(entry.children);
-          else if (/\.md$/i.test(entry.name)) notes.push(entry.path);
+          else if (/\.md$/i.test(entry.name)) known.add(entry.path);
         }
       };
       collect(folderDataRef.current);
+      const notes = [...known];
 
       const found = resolveWikiLink(target, notes, root, fromDirectory);
       if (found) {
         await selectFile(found);
+        goToHeading(found);
         return;
       }
       if (/[\\/]/.test(target)) {
@@ -817,7 +900,47 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
 
     window.addEventListener(WIKI_LINK_EVENT, follow);
     return () => window.removeEventListener(WIKI_LINK_EVENT, follow);
-  }, [selectFile, createFile]);
+  }, [selectFile, createFile, showingDocument, editorView]);
+
+  /**
+   * Opens what `nuza <path>` asked for: a folder as the vault, or a note in
+   * the vault it is in - or, if that is not the one open, in its own folder.
+   */
+  const openTarget = useCallback(
+    async (target: OpenTarget) => {
+      const plan = planOpen(target, rootPathRef.current);
+      if (!plan) return;
+
+      if ("select" in plan) {
+        await selectFile(plan.select);
+      } else if (!(await openVault(plan.folder, plan.focus))) {
+        report(`Couldn't open "${plan.folder}"`);
+      }
+    },
+    [selectFile, openVault]
+  );
+
+  // The command run again while the app is open, which hands what it was
+  // asked for to this window instead of starting another.
+  useEffect(() => {
+    const listening = listenHere<OpenTarget>(OPEN_TARGET_EVENT, ({ payload }) => void openTarget(payload));
+    return () => {
+      void listening.then((unlisten) => unlisten());
+    };
+  }, [openTarget]);
+
+  /**
+   * Reads what is inside a folder the sidebar has just opened. Rejects when the
+   * folder did not answer, which the row says; the next time it is opened it
+   * is asked again.
+   */
+  const loadFolder = useCallback(async (path: string) => {
+    const root = rootPathRef.current;
+    const children = await invoke<FileEntry[]>("list_folder", { path });
+    // The vault was switched while the folder was being read.
+    if (!root || root !== rootPathRef.current) return;
+    setFolderData((tree) => setChildren(tree, root, path, children));
+  }, []);
 
   const createFolder = useCallback(async (parentPath: string, name: string) => {
     await invoke("create_folder", { parentPath, name });
@@ -849,6 +972,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       setFolderData((tree) => removeEntry(tree, rootPathRef.current ?? "", path));
 
       forgetDocuments((open) => isWithin(open, path));
+      setSideFile((side) => (side && isWithin(side, path) ? null : side));
 
       const remaining = openPathsRef.current.filter((p) => !isWithin(p, path));
       recentRef.current = recentRef.current.filter((p) => !isWithin(p, path));
@@ -874,6 +998,11 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   return {
     editorContainer,
     editorView,
+    sideContainer,
+    sideView,
+    sideFile,
+    openToSide,
+    closeSide,
     viewGeneration,
     subscribeToStats,
     currentFile,
@@ -881,9 +1010,12 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
     dirtyPaths,
     conflicts,
     folderData,
+    fileIndex,
+    loadFolder,
     rootPath,
     openFolder,
     openVault,
+    openTarget,
     save,
     saveDirty,
     flush,

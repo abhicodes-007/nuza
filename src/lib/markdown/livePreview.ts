@@ -3,13 +3,16 @@ import { ChangeSet, EditorState, Range, StateField, Text } from "@codemirror/sta
 import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef, Tree } from "@lezer/common";
 import { FrontmatterRange, frontmatterRange, readFrontmatter } from "./frontmatter";
+import { mathSource } from "./math";
 import { rendersHtml } from "./sanitize";
-import { noteDirectory, resolveImageSource, safeExternalHref } from "./sources";
+import { isLocalImageTarget, noteDirectory, resolveImageSource, safeExternalHref } from "./sources";
 import { readWikiLink } from "./wikiLinks";
 import {
   BulletWidget,
   HtmlWidget,
   ImageWidget,
+  LinkThumbnailWidget,
+  MathWidget,
   PropertiesWidget,
   RuleWidget,
   TableAlignment,
@@ -29,6 +32,9 @@ const ORDERED_MARK = Decoration.mark({ class: "cm-md-ordered-mark" });
 const QUOTE_LINE = Decoration.line({ class: "cm-md-quote" });
 const TASK_DONE = Decoration.mark({ class: "cm-md-task-done" });
 const RULE_LINE = Decoration.line({ class: "cm-md-mark" });
+/** Math with the caret in it: the TeX as written, in the code face. */
+const MATH_SOURCE = Decoration.mark({ class: "cm-md-math-source" });
+const MATH_LINE = Decoration.line({ class: "cm-md-math-source" });
 /** Frontmatter with the caret in it: plain text, and plainly not prose. */
 const FRONTMATTER_LINE = Decoration.line({ class: "cm-md-frontmatter" });
 
@@ -37,6 +43,7 @@ const INLINE_CLASSES: Record<string, Decoration> = {
   Emphasis: Decoration.mark({ class: "cm-md-em" }),
   Strikethrough: Decoration.mark({ class: "cm-md-strike" }),
   InlineCode: Decoration.mark({ class: "cm-md-inline-code" }),
+  Tag: Decoration.mark({ class: "cm-md-tag" }),
 };
 
 const HEADING_LEVELS: Record<string, number> = {
@@ -442,12 +449,45 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
     return;
   }
 
+  if (name === "InlineMath") {
+    if (isBeingEdited(state, from, to)) {
+      out.push(MATH_SOURCE.range(from, to));
+      return false;
+    }
+    out.push(
+      Decoration.replace({ widget: new MathWidget(mathSource(doc.sliceString(from, to)), false) }).range(
+        from,
+        to
+      )
+    );
+    return false;
+  }
+
+  if (name === "BlockMath") {
+    const first = doc.lineAt(from);
+    const last = doc.lineAt(to);
+    if (isBeingEdited(state, from, to)) {
+      eachLine(doc, from, to, (lineStart) => out.push(MATH_LINE.range(lineStart)));
+      return false;
+    }
+    out.push(
+      Decoration.replace({
+        widget: new MathWidget(mathSource(doc.sliceString(from, to)), true),
+        block: true,
+      }).range(first.from, last.to)
+    );
+    return false;
+  }
+
   if (name === "WikiLink") {
     const inner = doc.sliceString(from + 2, to - 2);
-    const { target, label } = readWikiLink(inner);
+    const { target, heading, label } = readWikiLink(inner);
     const link = Decoration.mark({
       class: "cm-md-link cm-md-wikilink",
-      attributes: { "data-wikilink": target },
+      attributes:
+        heading === null
+          ? { "data-wikilink": target }
+          : { "data-wikilink": target, "data-wikilink-heading": heading },
     });
 
     // Being edited, it is all there to edit, with the brackets dimmed.
@@ -469,12 +509,26 @@ function decorateNode(node: SyntaxNodeRef, build: Build): boolean | undefined {
       ? doc.sliceString(urlNode.from, urlNode.to)
       : doc.sliceString(from, to).replace(/^<|>$/g, "");
     const href = safeExternalHref(target);
+    // `#heading` has no scheme to open, but it is a link to somewhere in this note.
+    const anchor = target.startsWith("#") ? target.slice(1) : null;
     out.push(
       Decoration.mark({
         class: "cm-md-link",
-        attributes: href ? { "data-href": href } : undefined,
+        attributes: href ? { "data-href": href } : anchor ? { "data-anchor": anchor } : undefined,
       }).range(from, to)
     );
+
+    // A link to a picture in the vault gets a small one beside it, unless the
+    // caret is in the link: then it is the markdown that is being edited.
+    const source =
+      urlNode && !isBeingEdited(state, from, to) && isLocalImageTarget(target)
+        ? resolveImageSource(target, directory)
+        : null;
+    if (source) {
+      const [open, close] = [...node.node.getChildren("LinkMark")];
+      const label = open && close ? doc.sliceString(open.to, close.from) : "";
+      out.push(Decoration.widget({ widget: new LinkThumbnailWidget(source, label), side: 1 }).range(to));
+    }
     return;
   }
 

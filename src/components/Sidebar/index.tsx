@@ -1,5 +1,5 @@
 import { memo, Ref, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { ArrowUpDown, ChevronsDownUp, FilePlus, FolderPlus, Search, X } from "lucide-react";
+import { ArrowUpDown, ChevronsDownUp, FilePlus, FolderPlus, Regex, Search, X } from "lucide-react";
 import { cn } from "cn";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { draggedPath, endDrag } from "@/lib/dragSource";
@@ -21,7 +21,9 @@ import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import SearchResults from "./SearchResults";
 import VaultSwitcher from "./VaultSwitcher";
 import Backlinks from "./Backlinks";
+import Tags from "./Tags";
 import { useBacklinks } from "@/hooks/useBacklinks";
+import { useTags } from "@/hooks/useTags";
 import { Vault } from "@/lib/vaults";
 
 /** What the rest of the app can ask the sidebar to do. */
@@ -32,12 +34,21 @@ export interface SidebarHandle {
 }
 
 interface SidebarProps {
+  /** The tree as far as it has been opened. */
   data: FileEntry[];
+  /** Every file in the vault, as a tree, for searching: the folders not opened yet are in it too. */
+  searchTree: FileEntry[];
+  /** Every note in the vault, for the panels that look through all of them. */
+  notes: string[];
+  /** Reads what is inside a folder that has just been opened. */
+  onLoadFolder: (path: string) => Promise<void>;
   rootPath?: string | null;
   onOpenFolder?: () => void;
   onFileSelect?: (path: string) => void;
   /** Opens a note with the caret on a line of it, for a hit in its text. */
   onOpenAt?: (path: string, line: number, column: number) => void;
+  /** Opens a note in the split beside the main pane. */
+  onOpenToSide?: (path: string) => void;
   currentFile?: string;
   onCreateFile: (parentPath: string, name: string) => Promise<void> | void;
   onCreateFolder: (parentPath: string, name: string) => Promise<void> | void;
@@ -62,10 +73,14 @@ interface SidebarProps {
 
 function Sidebar({
   data,
+  searchTree,
+  notes,
+  onLoadFolder,
   rootPath,
   onOpenFolder,
   onFileSelect,
   onOpenAt,
+  onOpenToSide,
   currentFile = "",
   onCreateFile,
   onCreateFolder,
@@ -91,10 +106,14 @@ function Sidebar({
   const [sortOrder, setSortOrder] = usePersistedState<SortOrder>("sidebarSort", "name");
   const [sortMenu, setSortMenu] = useState<{ x: number; y: number } | null>(null);
   const [backlinksOpen, setBacklinksOpen] = usePersistedState("backlinksOpen", true);
+  // Folded to begin with, which is also when it costs nothing: the tags are
+  // only read from the vault while the panel is open.
+  const [tagsOpen, setTagsOpen] = usePersistedState("tagsOpen", false);
   // Only for a note in the vault: the scratch note has no name to link to.
   const inVault = !!rootPath && currentFile.startsWith(rootPath);
   // Fetched folded too: the count on the heading is worth having on its own.
-  const backlinks = useBacklinks(currentFile, rootPath ?? null, data, inVault);
+  const backlinks = useBacklinks(currentFile, rootPath ?? null, notes, inVault);
+  const tags = useTags(currentFile, rootPath ?? null, notes, !!rootPath && tagsOpen);
   // Storage can hold anything; an order that is not one falls back to name.
   const order = SORT_ORDERS.some((option) => option.id === sortOrder) ? sortOrder : "name";
   /** The tree in the order it is shown in. For name order it is the tree itself. */
@@ -102,14 +121,27 @@ function Sidebar({
   const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [query, setQuery] = useState("");
+  // Whether what is typed is a regular expression to look for in the notes'
+  // text, rather than words. Kept: someone who searches with patterns does so
+  // every time.
+  const [patternSearch, setPatternSearch] = usePersistedState("searchByPattern", false);
   const [activeIndex, setActiveIndex] = useState(0);
   const treeRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const hasFolder = !!data && data.length > 0 && !!rootPath;
 
-  const matches = useMemo(() => (isSearching ? searchFiles(data, query) : []), [isSearching, data, query]);
-  const contentHits = useContentSearch(query, isSearching && hasFolder);
+  // File names are matched as words; a pattern is not a name, so with one
+  // there are no file matches, only the lines it finds.
+  const matches = useMemo(
+    () => (isSearching && !patternSearch ? searchFiles(searchTree, query) : []),
+    [isSearching, patternSearch, searchTree, query]
+  );
+  const { hits: contentHits, error: searchError } = useContentSearch(
+    query,
+    isSearching && hasFolder,
+    patternSearch
+  );
   const resultCount = matches.length + contentHits.length;
   /** With nothing typed the tree stays put, so opening search never blanks the panel. */
   const showResults = isSearching && query.trim().length > 0;
@@ -431,6 +463,10 @@ function Sidebar({
         { label: "New Folder", onClick: () => beginCreate("folder", entry.path) }
       );
     }
+    // The note in front cannot also be beside itself.
+    if (onOpenToSide && !entry.isDirectory && entry.path !== currentFile) {
+      items.push({ label: "Open to the Side", onClick: () => onOpenToSide(entry.path) });
+    }
     items.push({ label: "Rename", onClick: () => setRenamingPath(entry.path) });
     if (!entry.isDirectory) items.push({ label: "Duplicate", onClick: () => duplicateEntry(entry.path) });
     items.push(
@@ -456,6 +492,7 @@ function Sidebar({
       openContextMenu,
       moveEntry,
       attachFiles,
+      loadFolder: onLoadFolder,
     }),
     [
       onFileSelect,
@@ -469,6 +506,7 @@ function Sidebar({
       openContextMenu,
       moveEntry,
       attachFiles,
+      onLoadFolder,
     ]
   );
 
@@ -562,7 +600,7 @@ function Sidebar({
             <input
               ref={searchRef}
               value={query}
-              placeholder="Find a file or text"
+              placeholder={patternSearch ? "Find text by pattern" : "Find a file or text"}
               aria-label="Search files"
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -571,6 +609,22 @@ function Sidebar({
               onKeyDown={onSearchKeyDown}
               className="min-w-0 flex-1 bg-transparent text-xs text-white outline-none placeholder:text-zinc-600"
             />
+            <button
+              onClick={() => {
+                setPatternSearch((on) => !on);
+                setActiveIndex(0);
+                searchRef.current?.focus();
+              }}
+              title={patternSearch ? "Regular Expression: On" : "Regular Expression: Off"}
+              aria-label="Search by regular expression"
+              aria-pressed={patternSearch}
+              className={cn(
+                "shrink-0 cursor-pointer rounded transition-colors hover:text-white",
+                patternSearch ? "text-[var(--nuza-accent)]" : "text-zinc-600"
+              )}
+            >
+              <Regex className="h-3 w-3" />
+            </button>
             {query && (
               <button
                 onClick={() => {
@@ -621,12 +675,13 @@ function Sidebar({
           if (files.length) attachFiles(rootPath, files);
           else if (dragging) moveEntry(dragging, rootPath);
         }}
-        className="group/tree flex flex-1 flex-col overflow-y-auto px-2 py-3 outline-none"
+        className="group/tree flex flex-1 flex-col overflow-y-auto px-2 py-3 outline-none compact:py-1.5"
       >
         {showResults ? (
           <SearchResults
             matches={matches}
             contentHits={contentHits}
+            error={searchError}
             rootPath={rootPath ?? ""}
             activeIndex={activeIndex}
             currentFile={currentFile}
@@ -659,13 +714,23 @@ function Sidebar({
         )}
       </div>
 
-      {inVault && (
-        <Backlinks
-          links={backlinks}
-          isOpen={backlinksOpen}
-          onToggle={() => setBacklinksOpen((open) => !open)}
-          onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
-        />
+      {rootPath && (
+        <div className="shrink-0 border-t border-zinc-800/70 px-1.5 py-1">
+          <Tags
+            index={tags}
+            isOpen={tagsOpen}
+            onToggle={() => setTagsOpen((open) => !open)}
+            onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
+          />
+          {inVault && (
+            <Backlinks
+              links={backlinks}
+              isOpen={backlinksOpen}
+              onToggle={() => setBacklinksOpen((open) => !open)}
+              onOpen={(path, line) => (onOpenAt ? onOpenAt(path, line, 0) : onFileSelect?.(path))}
+            />
+          )}
+        </div>
       )}
 
       <VaultSwitcher

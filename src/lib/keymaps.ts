@@ -2,6 +2,7 @@ export type KeymapAction =
   | "toggle-sidebar"
   | "save-file"
   | "open-folder"
+  | "new-window"
   | "search-files"
   | "quick-open"
   | "open-settings"
@@ -47,6 +48,12 @@ export const KEYMAP_ACTIONS: KeymapDefinition[] = [
     label: "Open Folder",
     description: "Open a folder in the explorer",
     defaultBinding: "mod+o",
+  },
+  {
+    id: "new-window",
+    label: "New Window",
+    description: "Open another window, on the welcome screen",
+    defaultBinding: "mod+shift+n",
   },
   {
     id: "search-files",

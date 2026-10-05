@@ -240,6 +240,15 @@ const editorTheme = EditorView.theme(
       borderRadius: "0.3em",
       padding: "0.12em 0.35em",
     },
+    /* A tag: the accent, set in a quiet pill so it reads as a label and not as a
+       link - it is not something you follow from here, it is listed in the sidebar. */
+    ".cm-md-tag": {
+      color: ink.accent,
+      backgroundColor: "var(--nuza-accent-faint)",
+      boxShadow: "inset 0 0 0 1px var(--nuza-accent-underline)",
+      borderRadius: "0.6em",
+      padding: "0.05em 0.45em",
+    },
     ".cm-md-link": {
       color: ink.accent,
       textDecoration: "underline",
@@ -460,6 +469,27 @@ const editorTheme = EditorView.theme(
       transition: "opacity 220ms ease",
     },
     ".cm-md-image-loaded img": { opacity: "1" },
+
+    /* The small picture after a link to an image: a line tall and a bit more,
+       set on the text's own baseline so it does not push the line apart. */
+    ".cm-md-link-thumb": {
+      display: "inline-block",
+      marginLeft: "0.4em",
+      verticalAlign: "middle",
+      cursor: "zoom-in",
+    },
+    ".cm-md-link-thumb img": {
+      display: "block",
+      height: "1.7em",
+      maxWidth: "4.5em",
+      objectFit: "cover",
+      borderRadius: "0.3em",
+      boxShadow: `0 0 0 1px ${ink.hairline}`,
+      opacity: "0",
+      transition: "opacity 200ms ease, transform 140ms ease",
+    },
+    ".cm-md-link-thumb-loaded img": { opacity: "1" },
+    ".cm-md-link-thumb:hover img": { transform: "scale(1.06)" },
     ".cm-md-image-broken": {
       color: ink.muted,
       fontStyle: "italic",
@@ -478,6 +508,9 @@ const editorTheme = EditorView.theme(
        inside an HTML block are drawn as real blank lines. Headings and list
        markers have to be restated too, since Tailwind's preflight strips them
        from every element on the page. */
+    ".cm-md-math": { whiteSpace: "normal" },
+    ".cm-md-math-block": { display: "block", padding: "0.5em 0", textAlign: "center", overflowX: "auto" },
+    ".cm-md-math-source": { fontFamily: CODE_FONT_FAMILY, color: ink.code },
     ".cm-md-html": { whiteSpace: "normal" },
     ".cm-md-html-block": { display: "block", padding: "0.3em 0" },
     ".cm-md-html h1": { fontSize: "1.6em" },
