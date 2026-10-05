@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { FileEntry } from "@/lib/types";
@@ -15,6 +14,7 @@ import {
   setChildren,
 } from "@/lib/fileTree";
 import { report } from "@/lib/notices";
+import { listenHere } from "@/lib/windowEvents";
 import { readScratch, writeScratch } from "@/lib/scratch";
 import { readSession, writeSession } from "@/lib/session";
 import { ATTACHMENT_EVENT, announceAttachment, fileNameOf, writeMedia } from "@/lib/media";
@@ -506,7 +506,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * what just arrived.
    */
   useEffect(() => {
-    const listening = listen<string>(FILE_CHANGED_EVENT, async ({ payload: path }) => {
+    const listening = listenHere<string>(FILE_CHANGED_EVENT, async ({ payload: path }) => {
       // Only notes the app is actually holding. Everything else is the
       // sidebar's business, and it is not showing stale text of anything.
       if (!isDocumentOpen(path)) return;
@@ -923,7 +923,7 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   // The command run again while the app is open, which hands what it was
   // asked for to this window instead of starting another.
   useEffect(() => {
-    const listening = listen<OpenTarget>(OPEN_TARGET_EVENT, ({ payload }) => void openTarget(payload));
+    const listening = listenHere<OpenTarget>(OPEN_TARGET_EVENT, ({ payload }) => void openTarget(payload));
     return () => {
       void listening.then((unlisten) => unlisten());
     };

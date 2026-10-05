@@ -199,6 +199,14 @@ pub(crate) fn refresh_window_menu(app: &tauri::AppHandle) {
     };
     let menu = &menu.0;
 
+    // One at a time: windows open and adopt their folders together at launch,
+    // and two refreshes taking items out and putting them back would leave
+    // either's list - or both lists - in the menu.
+    static REFRESHING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one_at_a_time = REFRESHING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     // Everything this put there last time, and the separator in front of it.
     if let Ok(items) = menu.items() {
         for item in items.iter().skip(2) {

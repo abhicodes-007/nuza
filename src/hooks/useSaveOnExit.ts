@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isMacPlatform } from "@/lib/platform";
+import { listenHere } from "@/lib/windowEvents";
 import { flushPersistedState } from "./usePersistedState";
 
 /** Fired at every window by the "Quit" item the app puts in the macOS menu bar. */
@@ -56,7 +56,7 @@ export function useSaveOnExit(flush: () => Promise<void>) {
       await window.destroy();
     });
     const quitting = isMacPlatform()
-      ? listen(QUIT_EVENT, async () => {
+      ? listenHere(QUIT_EVENT, async () => {
           await save();
           // The app exits when every window has said this, or has run out of time.
           await invoke("window_ready_to_quit");

@@ -294,10 +294,14 @@ pub(crate) fn open_window(
     let window = builder.build().map_err(|e| e.to_string())?;
 
     // A window without a backdrop is a window that paints itself opaque, which
-    // the frontend already handles.
-    if let Err(error) = crate::window::apply_transparency(&window, true) {
-        eprintln!("nuza: no window backdrop on this platform: {}", error);
-    }
+    // the frontend already handles. The backdrop is the main thread's to apply,
+    // and this is not it.
+    let backdrop = window.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(error) = crate::window::apply_transparency(&backdrop, true) {
+            eprintln!("nuza: no window backdrop on this platform: {}", error);
+        }
+    });
     raise(&window);
     changed(app);
     Ok(window)

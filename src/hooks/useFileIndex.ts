@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { FileEntry } from "@/lib/types";
+import { listenHere } from "@/lib/windowEvents";
 import { notePaths, treeFromFiles } from "@/lib/fileIndex";
 
 /** Said by the backend when the vault's set of files changed, or its index was finished. */
@@ -42,7 +42,7 @@ export function useFileIndex(root: string | null) {
     // Nothing from the vault that was open before this one.
     setFiles([]);
     load();
-    const listening = listen(INDEX_CHANGED_EVENT, () => {
+    const listening = listenHere(INDEX_CHANGED_EVENT, () => {
       clearTimeout(timer);
       timer = setTimeout(load, SETTLE_DELAY);
     });

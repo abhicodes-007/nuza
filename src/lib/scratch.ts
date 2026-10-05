@@ -1,4 +1,4 @@
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isMainWindow } from "./windowLabel";
 
 /**
  * The scratch note, kept between runs and across vault switches.
@@ -18,14 +18,8 @@ const STORAGE_KEY = "nuza:scratch";
  * others start empty, and what is typed in them is not kept - a note worth
  * keeping is one that has been saved to a file.
  */
-function ownsScratch() {
-  try {
-    return getCurrentWindow().label === "main";
-  } catch {
-    // Not running inside a window at all, as in a test.
-    return true;
-  }
-}
+const ownsScratch = isMainWindow;
+
 /** What was in the scratch note last time, or nothing if it was never used. */
 export function readScratch(): string {
   if (!ownsScratch()) return "";

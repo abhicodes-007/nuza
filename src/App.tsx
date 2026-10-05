@@ -26,6 +26,7 @@ import { usePersistedState } from "./hooks/usePersistedState";
 import { useRecentFiles } from "./hooks/useRecentFiles";
 import { useResizableSidebar } from "./hooks/useResizableSidebar";
 import { report } from "./lib/notices";
+import { isMainWindow } from "./lib/windowLabel";
 import { addFrontmatter, addProperty, canAddFrontmatter } from "./lib/markdown/addFrontmatter";
 import { OpenTarget } from "./lib/launchTarget";
 import { wikiLinkText, wikiTargetFor } from "./lib/markdown/wikiLinks";
@@ -182,9 +183,12 @@ function App() {
   // reopened, or the vault would open first and the command's note after it.
   const [launchTarget, setLaunchTarget] = useState<OpenTarget | null | undefined>(undefined);
   useEffect(() => {
+    // The target is handed over once, so when this runs twice - as it does in
+    // development, under StrictMode - the second answer is "nothing", and must
+    // not take the place of the first.
     invoke<OpenTarget | null>("take_launch_target")
-      .then(setLaunchTarget)
-      .catch(() => setLaunchTarget(null));
+      .then((target) => setLaunchTarget((current) => current ?? target))
+      .catch(() => setLaunchTarget((current) => current ?? null));
   }, []);
 
   // Picking up where you left off: the vault most recently opened is reopened
@@ -197,6 +201,13 @@ function App() {
     if (launchTarget) {
       reopened.current = true;
       void openTarget(launchTarget);
+      return;
+    }
+
+    // A window opened with File > New Window is for a vault of its own choosing:
+    // reopening the last one there would put two windows on one vault.
+    if (!isMainWindow()) {
+      reopened.current = true;
       return;
     }
 
