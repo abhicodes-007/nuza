@@ -24,7 +24,7 @@ pub(crate) const QUIT_EVENT: &str = "menu:quit";
 
 /// How long quitting waits for the windows to say they have saved. A window
 /// that has hung cannot be allowed to keep the app from quitting.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 const QUIT_PATIENCE: Duration = Duration::from_secs(5);
 
 /// Two requests for a new window this close together are one: a menu key that
