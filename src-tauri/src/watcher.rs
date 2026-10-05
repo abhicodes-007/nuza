@@ -1,4 +1,5 @@
 use crate::launch::FILE_CHANGED_EVENT;
+use crate::search::announce_files;
 use crate::state::{changed_since_read, locked, vault_of};
 use notify::{RecursiveMode, Watcher};
 use std::path::Path;
@@ -25,9 +26,24 @@ pub(crate) fn watch_vault<R: tauri::Runtime>(
         let Some(vault) = seen_by.upgrade() else {
             return;
         };
+        // The watcher lost count of what happened - too many changes at once
+        // for the OS to list - so the index cannot be patched, only read again.
+        if event.need_rescan() {
+            let announced = handle.clone();
+            vault
+                .index
+                .rescan_in_background(move || announce_files(&announced, true));
+            return;
+        }
         if !event.kind.is_modify() && !event.kind.is_create() && !event.kind.is_remove() {
             return;
         }
+
+        let mut files_changed = false;
+        for path in &event.paths {
+            files_changed |= vault.index.refresh(path);
+        }
+        announce_files(&handle, files_changed);
 
         for path in event.paths {
             // Only notes the app is actually holding, and only when what is on

@@ -2,11 +2,13 @@ mod cli;
 mod files;
 mod folder;
 mod fonts;
+mod index;
 mod launch;
 mod media;
 mod menu;
 mod recovery;
 mod search;
+mod slow;
 mod state;
 mod tags;
 mod tasks;
@@ -106,8 +108,10 @@ pub fn run() {
             files::save_file_picker,
             folder::load_folder_picker,
             folder::open_folder,
+            folder::list_folder,
             files::read_file,
             search::search_contents,
+            search::list_files,
             wiki::list_wiki_links,
             search::list_tags,
             launch::take_launch_target,

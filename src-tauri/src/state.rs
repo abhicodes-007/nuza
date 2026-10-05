@@ -31,6 +31,9 @@ pub(crate) struct Vault {
     /// how notify stops watching, so replacing this is how switching vaults
     /// stops listening to the old one.
     pub(crate) watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// Every file in the folder, and the text of the notes, kept current as
+    /// the folder changes - what search, quick-open and the scans read.
+    pub(crate) index: Arc<crate::index::VaultIndex>,
 }
 
 /// Every window's vault, by the window's label.
