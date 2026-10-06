@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod appimage;
 mod cli;
 mod files;
 mod folder;
@@ -26,6 +28,10 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything else: it may start the program again.
+    #[cfg(target_os = "linux")]
+    appimage::prefer_system_wayland();
+
     let builder = tauri::Builder::default();
 
     // First of the plugins, which is what it asks for: a second `nuza` is
