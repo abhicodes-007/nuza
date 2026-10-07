@@ -1,7 +1,7 @@
 use crate::search::note_changes;
 use crate::state::{
-    changed_since_read, locked, remember, vault_of, within_vault, within_vault_to_create,
-    within_vault_to_write, Vault, CHANGED_ON_DISK,
+    changed_since_read, files_present, follow_move, locked, remember, vault_of, within_vault,
+    within_vault_to_create, within_vault_to_write, Vault, CHANGED_ON_DISK,
 };
 use crate::tasks::{off_thread, wait_for_picker};
 use std::fs;
@@ -81,6 +81,7 @@ pub(crate) async fn rename_entry(
             true => format!("\"{}\" already exists", new_name),
             false => error.to_string(),
         })?;
+        follow_move(&vault, &old, &new_path);
         note_changes(&window, &[&old, &new_path]);
         Ok(new_path.to_string_lossy().into_owned())
     })
@@ -104,6 +105,7 @@ pub(crate) async fn move_entry(
             true => format!("\"{}\" already exists in destination", name),
             false => error.to_string(),
         })?;
+        follow_move(&vault, &old, &new_path);
         note_changes(&window, &[&old, &new_path]);
         Ok(new_path.to_string_lossy().into_owned())
     })
@@ -196,7 +198,11 @@ pub(crate) async fn save_file_picker(
                                 // that the autosave that follows is allowed to
                                 // keep writing the note they just saved.
                                 if let Ok(resolved) = Path::new(&path_str).canonicalize() {
-                                    locked(&vault_of(&chosen).chosen).insert(resolved);
+                                    let vault = vault_of(&chosen);
+                                    // Read from here on, as far as noticing
+                                    // a change made elsewhere goes.
+                                    remember(&vault, &resolved);
+                                    locked(&vault.chosen).insert(resolved);
                                 }
                                 Ok(Some(path_str))
                             }
@@ -570,6 +576,19 @@ pub(crate) fn duplicate_file(source: &Path) -> Result<PathBuf, String> {
     let _ = fs::set_permissions(&copy_path, metadata.permissions());
 
     Ok(copy_path)
+}
+
+/// Which of `paths` are still files in the open vault, for reopening the tabs
+/// of a session: a note deleted or moved since is one not to open a tab onto.
+///
+/// Asked of the disk rather than of the sidebar's tree, which is read a folder
+/// at a time and knows nothing about a note in a folder nobody has opened yet.
+#[tauri::command]
+pub(crate) async fn existing_files(
+    window: tauri::WebviewWindow,
+    paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    off_thread(move || Ok(files_present(&vault_of(&window), paths))).await
 }
 
 #[tauri::command]

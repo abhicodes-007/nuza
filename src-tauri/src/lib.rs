@@ -136,6 +136,7 @@ pub fn run() {
             folder::open_folder,
             folder::list_folder,
             files::read_file,
+            files::existing_files,
             search::search_contents,
             search::list_files,
             wiki::list_wiki_links,
