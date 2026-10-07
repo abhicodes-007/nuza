@@ -14,8 +14,8 @@ use crate::recovery::{recovery_file, Recovery};
 use crate::search::{search_index, search_notes, search_text, search_vault, ContentHit, Matcher};
 use crate::slow::{run_all, run_one};
 use crate::state::{
-    changed_since_read, locked, remember, within_vault, within_vault_to_create,
-    within_vault_to_write, Vault, Windows,
+    changed_since_read, files_present, follow_move, locked, remember, within_vault,
+    within_vault_to_create, within_vault_to_write, Vault, Windows,
 };
 use crate::tree::{
     list_folder_with, probe, read_dir_recursive, read_dir_recursive_with, FileEntry, Patience,
@@ -321,6 +321,98 @@ fn a_note_nobody_touched_has_not_changed() {
     remember(&vault, &note);
 
     assert!(!changed_since_read(&vault, &note));
+}
+
+/// A renamed note is still a note that was read: a change made to it
+/// elsewhere afterwards has to be noticed under its new name.
+#[test]
+fn a_renamed_note_is_still_watched_for_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = opened(dir.path());
+    let root = dir.path().canonicalize().unwrap();
+    let (old, new) = (root.join("a.md"), root.join("b.md"));
+    fs::write(&old, "hello").unwrap();
+    remember(&vault, &old);
+
+    fs::rename(&old, &new).unwrap();
+    follow_move(&vault, &old, &new);
+    assert!(!changed_since_read(&vault, &new));
+
+    touch(&new);
+
+    assert!(changed_since_read(&vault, &new));
+    assert!(!locked(&vault.known).contains_key(&old));
+}
+
+/// Moving a folder moves every note that was read from inside it.
+#[test]
+fn notes_in_a_moved_folder_are_still_watched_for_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = opened(dir.path());
+    let root = dir.path().canonicalize().unwrap();
+    fs::create_dir_all(root.join("drafts").join("deep")).unwrap();
+    let note = root.join("drafts").join("deep").join("note.md");
+    let beside = root.join("drafts-old.md");
+    fs::write(&note, "hello").unwrap();
+    fs::write(&beside, "hello").unwrap();
+    remember(&vault, &note);
+    remember(&vault, &beside);
+
+    fs::rename(root.join("drafts"), root.join("archive")).unwrap();
+    follow_move(&vault, &root.join("drafts"), &root.join("archive"));
+
+    let landed = root.join("archive").join("deep").join("note.md");
+    touch(&landed);
+    assert!(changed_since_read(&vault, &landed));
+    // A name that only starts the same way is not inside the folder.
+    assert!(locked(&vault.known).contains_key(&beside));
+}
+
+/// A change that arrived before the rename is not waved through by it.
+#[test]
+fn a_rename_does_not_forgive_an_earlier_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = opened(dir.path());
+    let root = dir.path().canonicalize().unwrap();
+    let (old, new) = (root.join("a.md"), root.join("b.md"));
+    fs::write(&old, "hello").unwrap();
+    remember(&vault, &old);
+    touch(&old);
+
+    fs::rename(&old, &new).unwrap();
+    follow_move(&vault, &old, &new);
+
+    assert!(changed_since_read(&vault, &new));
+}
+
+/// Reopening a session asks which of its notes are still there, wherever in
+/// the vault they are - not only at the top of it.
+#[test]
+fn finds_the_notes_of_a_session_that_are_still_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let vault = opened(dir.path());
+    fs::create_dir_all(dir.path().join("folder").join("deeper")).unwrap();
+    let top = dir.path().join("top.md");
+    let nested = dir.path().join("folder").join("deeper").join("nested.md");
+    let outside = elsewhere.path().join("outside.md");
+    for note in [&top, &nested, &outside] {
+        fs::write(note, "hello").unwrap();
+    }
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+
+    let found = files_present(
+        &vault,
+        vec![
+            text(&nested),
+            text(&dir.path().join("gone.md")),
+            text(&dir.path().join("folder")),
+            text(&outside),
+            text(&top),
+        ],
+    );
+
+    assert_eq!(found, vec![text(&nested), text(&top)]);
 }
 
 /// The case the whole thing exists for: something else wrote to the note

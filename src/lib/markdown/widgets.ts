@@ -32,6 +32,14 @@ export function unescapeCell(text: string) {
   return text.replace(/\\\|/g, "|");
 }
 
+/**
+ * A cell's text as it has to be written in the table: a bare pipe would start
+ * a new column, and a newline a new row. The other half of `unescapeCell`.
+ */
+export function escapeCell(text: string) {
+  return text.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
+}
+
 function inlineElement(match: RegExpExecArray): Node {
   if (match[2] !== undefined) return wrap("strong", "cm-md-strong", match[2]);
   if (match[4] !== undefined) return wrap("em", "cm-md-em", match[4]);
@@ -451,11 +459,14 @@ export class TableWidget extends WidgetType {
     const { from, to } = this.rangeOf(view, wrapper, cell);
     const field = textField({
       className: "cm-md-cell",
-      value: view.state.doc.sliceString(from, to),
+      // As the cell reads, not as it is written: a pipe is shown as a pipe and
+      // escaped again on the way back. Filled with the source, the field held
+      // the backslash of an escaped pipe as well, and escaping that a second
+      // time left a backslash followed by a pipe that split the cell in two.
+      value: unescapeCell(view.state.doc.sliceString(from, to)),
       onInput: (text) => {
         const range = this.rangeOf(view, wrapper, cell);
-        // A bare pipe would start a new column, and a newline a new row.
-        const insert = text.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
+        const insert = escapeCell(text);
         if (view.state.doc.sliceString(range.from, range.to) === insert) return;
 
         cell.dataset.length = String(insert.length);
