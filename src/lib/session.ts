@@ -109,3 +109,21 @@ export function writeSession(vault: string, session: Session) {
     console.error("Failed to record the open tabs:", error);
   }
 }
+
+/**
+ * The tabs to reopen out of `session`, given which of its notes are still
+ * `present` on disk: the ones that are gone are dropped, a note asked for by
+ * name (`focus`) joins the rest and goes in front, and otherwise the note that
+ * was in front last time is - or the first tab, if that one has gone.
+ * `current` is undefined when there is nothing left to reopen.
+ */
+export function tabsToRestore(session: Session, present: readonly string[], focus?: string) {
+  const there = new Set(present);
+  const open = session.open.filter((path) => there.has(path));
+
+  const asked = focus && there.has(focus) ? focus : undefined;
+  if (asked && !open.includes(asked)) open.push(asked);
+
+  const current: string | undefined = asked ?? (open.includes(session.current) ? session.current : open[0]);
+  return { open, current };
+}

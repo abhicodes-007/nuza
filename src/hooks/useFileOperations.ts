@@ -16,7 +16,7 @@ import {
 import { report } from "@/lib/notices";
 import { listenHere } from "@/lib/windowEvents";
 import { readScratch, writeScratch } from "@/lib/scratch";
-import { readSession, writeSession } from "@/lib/session";
+import { readSession, tabsToRestore, writeSession } from "@/lib/session";
 import { ATTACHMENT_EVENT, announceAttachment, fileNameOf, writeMedia } from "@/lib/media";
 import { isWithin, rewritePath } from "@/lib/path";
 import { ClosedTab, placeAt, rememberClosed } from "@/lib/closedTabs";
@@ -57,6 +57,13 @@ function isConflict(error: unknown) {
  * than lost, since there is no prompt there to catch it.
  */
 const AUTOSAVE_DELAY = 800;
+
+/**
+ * How long a save that failed is left before it is tried again. A full disk or
+ * a folder that has gone read-only does not mend itself in under a second, and
+ * each attempt says that it failed.
+ */
+const AUTOSAVE_RETRY_DELAY = 10_000;
 
 interface UseFileOperationsOptions {
   /** Editor extensions that follow the app's settings. */
@@ -250,6 +257,8 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    */
   const sessionVault = useRef<string | null>(null);
   const sessionReady = useRef(false);
+  /** Counts the restores started, so one overtaken by the next can tell. */
+  const restoring = useRef(0);
 
   /**
    * Reopens the notes that were last open in `folder`, or leaves the editor on
@@ -259,34 +268,55 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    */
   const restoreSession = useCallback(
     async (folder: OpenedFolder, focus?: string) => {
+      const mine = ++restoring.current;
+      const overtaken = () => mine !== restoring.current;
+
       const session = readSession(folder.path);
-      // Notes deleted or moved since last time are quietly dropped rather than
-      // reopened as tabs onto nothing.
-      const open = session.open.filter((path) => findEntry(folder.entries, path));
       // A note asked for by name - from a terminal - goes in front of whatever
       // was open, and joins the tabs if it was not one of them.
-      const asked = focus && findEntry(folder.entries, focus) ? focus : undefined;
-      if (asked && !open.includes(asked)) open.push(asked);
-      const current = asked ?? (open.includes(session.current) ? session.current : open[0]);
+      const wanted = focus && !session.open.includes(focus) ? [...session.open, focus] : session.open;
 
+      let restored = false;
       try {
+        // Notes deleted or moved since last time are quietly dropped rather
+        // than reopened as tabs onto nothing. The disk is asked, not the tree:
+        // the tree is read a folder at a time, and has not heard of a note in
+        // a folder nobody has opened yet - which used to lose every such tab.
+        let present = wanted;
+        if (wanted.length > 0) {
+          try {
+            present = await invoke<string[]>("existing_files", { paths: wanted });
+          } catch (error) {
+            // Not knowing which are gone is no reason to drop them all.
+            console.error("Couldn't check which notes are still there:", error);
+          }
+        }
+        if (overtaken()) return;
+
+        const { open, current } = tabsToRestore(session, present, focus);
         if (!current) throw new Error("nothing to reopen");
         const content = await invoke<string>("read_file", { path: current });
+        if (overtaken()) return;
 
         recentRef.current = [current, ...open.filter((path) => path !== current)];
         setOpenPaths(open);
         setCurrentFile(current);
         openDocument(current, content);
+        restored = true;
 
         // The likeliest note to have edits waiting is the one that was open
         // when the app went away, and this is the path it comes back through -
         // it never goes near `selectFile`.
         void offerRecovered(current, content);
       } catch {
-        resetToScratch();
-      } finally {
-        sessionReady.current = true;
+        // Nothing to reopen, or the note in front could not be read.
       }
+
+      // Another folder was opened while this one was being read: the tabs on
+      // screen are that one's business now, and so is saying they are ready.
+      if (overtaken()) return;
+      if (!restored) resetToScratch();
+      sessionReady.current = true;
     },
     [openDocument, resetToScratch, offerRecovered]
   );
@@ -359,6 +389,13 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
    * only lowered if the text has not moved on since it was read, so an edit
    * made while the write was in flight stays flagged for the next one.
    */
+  /**
+   * How soon the autosave should run again once the one in hand is done, or
+   * null if it has nothing left to do. A note that is still dirty after a save
+   * does not change the dirty set, so nothing else would bring the timer back.
+   */
+  const saveAgain = useRef<number | null>(null);
+
   const writeDocument = useCallback(
     async (path: string, force = false) => {
       const before = documentRevision(path);
@@ -374,6 +411,9 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
       }
 
       if (documentRevision(path) === before) markSaved(path);
+      // Typed in while the write was on its way: what is on disk is already
+      // behind, and the autosave has to come round again for the rest.
+      else saveAgain.current = AUTOSAVE_DELAY;
       // Keeps "Date Modified" order honest about the notes written from here.
       setFolderData((tree) => touchEntry(tree, rootPathRef.current ?? "", path));
       // What is on disk is this note now, whatever it was a moment ago.
@@ -437,7 +477,11 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
         } catch (error) {
           // A note waiting on an answer already has the bar above it saying
           // so; the autosave being turned away is that bar working.
-          if (!isConflict(error)) report(`Couldn't save "${fileNameOf(path)}"`, error);
+          if (!isConflict(error)) {
+            report(`Couldn't save "${fileNameOf(path)}"`, error);
+            // Still unsaved, and nothing but another try will change that.
+            saveAgain.current ??= AUTOSAVE_RETRY_DELAY;
+          }
         }
       })
     );
@@ -488,12 +532,27 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   // this schedules a write shortly after a note *becomes* dirty rather than
   // restarting on every keystroke - a run of typing is saved every
   // AUTOSAVE_DELAY rather than only once the typing stops.
+  //
+  // A note typed in while its save was in flight is still dirty when the save
+  // lands, and the set is the same set - so the save asks for another round
+  // itself, through `saveAgain`, or that note would sit unsaved until quit.
+  const [autosave, setAutosave] = useState({ round: 0, delay: AUTOSAVE_DELAY });
   useEffect(() => {
     if (dirtyPaths.size === 0) return;
 
-    const timer = setTimeout(() => void flush(), AUTOSAVE_DELAY);
+    const timer = setTimeout(() => {
+      saveAgain.current = null;
+      void flush().finally(() => {
+        const delay = saveAgain.current;
+        setAutosave((last) => {
+          if (delay !== null) return { round: last.round + 1, delay };
+          // Nothing left over: back to the usual pace, if a failure slowed it.
+          return last.delay === AUTOSAVE_DELAY ? last : { ...last, delay: AUTOSAVE_DELAY };
+        });
+      });
+    }, autosave.delay);
     return () => clearTimeout(timer);
-  }, [dirtyPaths, flush]);
+  }, [dirtyPaths, flush, autosave]);
 
   /**
    * A note has changed underneath the app - a sync client, a git checkout, a
@@ -611,9 +670,10 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const selectFile = useCallback(
     async (path: string) => {
       try {
-        if (path === currentFileRef.current) return;
-
+        // Taken before anything else, so that going back to the note already
+        // on screen overtakes one that is still being read.
         const mine = ++selectionRef.current;
+        if (path === currentFileRef.current) return;
 
         // Only a document that has never been opened costs a read; everything
         // else is already sitting in memory as editor state.
@@ -657,9 +717,9 @@ export function useFileOperations({ preferences, onFolderOpened }: UseFileOperat
   const openToSide = useCallback(
     async (path: string) => {
       try {
+        const mine = ++sideSelectionRef.current;
         if (path === currentFileRef.current) return;
 
-        const mine = ++sideSelectionRef.current;
         const firstRead = !isDocumentOpen(path);
         const content = firstRead ? await invoke<string>("read_file", { path }) : null;
 
