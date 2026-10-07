@@ -5,7 +5,14 @@ import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "@uiw/codemirror-extensions-basic-setup";
 import { directoryOf, liveMarkdown, noteDirectory, vaultDirectory } from "@/lib/markdown";
 import { documentsToEvict } from "@/lib/documentCache";
-import { countDocument, DocumentStats, EMPTY_DOCUMENT_STATS, recount, WordTally } from "@/lib/documentStats";
+import {
+  countDocument,
+  countSelection,
+  DocumentStats,
+  EMPTY_DOCUMENT_STATS,
+  recount,
+  WordTally,
+} from "@/lib/documentStats";
 
 /**
  * Nothing in the margins and nothing highlighted: the rendered markdown is the
@@ -157,17 +164,40 @@ export function useDocuments({
     for (const listener of listeners.current) listener(stats);
   }, []);
 
+  /**
+   * The count fields for whatever is on screen: a selection's own words and
+   * characters stand in for the document's, and the document's paragraphs
+   * carry on either way. Shared by the debounced count and the per-edit
+   * report so neither can publish the other's shape.
+   */
+  const statsPartial = useCallback((state: EditorState) => {
+    const counted = tally.current?.doc === state.doc ? tally.current : null;
+    const selection = state.selection.main;
+    const selected = selection.empty
+      ? null
+      : countSelection(state.doc.sliceString(selection.from, selection.to));
+    return {
+      ...(counted && { paragraphs: counted.paragraphs }),
+      ...(selected
+        ? { words: selected.words, characters: selected.characters }
+        : {
+            ...(counted && { words: counted.words }),
+            characters: state.doc.length,
+          }),
+    };
+  }, []);
+
   const scheduleCount = useCallback(() => {
     if (countTimer.current) clearTimeout(countTimer.current);
     countTimer.current = setTimeout(() => {
       countTimer.current = null;
-      const doc = editor.current?.state.doc;
-      if (!doc) return;
-      const { words, paragraphs } = countDocument(doc);
-      tally.current = { doc, words, paragraphs };
-      publish({ ...latestStats.current, words, paragraphs });
+      const state = editor.current?.state;
+      if (!state) return;
+      const { words, paragraphs } = countDocument(state.doc);
+      tally.current = { doc: state.doc, words, paragraphs };
+      publish({ ...latestStats.current, ...statsPartial(state) });
     }, COUNT_DELAY);
-  }, [publish]);
+  }, [publish, statsPartial]);
 
   const reportStats = useCallback(
     (state: EditorState) => {
@@ -176,8 +206,7 @@ export function useDocuments({
       const counted = tally.current?.doc === state.doc ? tally.current : null;
       publish({
         ...latestStats.current,
-        ...(counted && { words: counted.words, paragraphs: counted.paragraphs }),
-        characters: state.doc.length,
+        ...statsPartial(state),
         line: line.number,
         column: head - line.from + 1,
       });
@@ -185,7 +214,7 @@ export function useDocuments({
       // full once things settle.
       if (!counted) scheduleCount();
     },
-    [publish, scheduleCount]
+    [publish, scheduleCount, statsPartial]
   );
 
   /** Adds a listener for the open document's statistics, called straight away. */
