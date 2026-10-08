@@ -1,4 +1,5 @@
 import { ChangeSet, Text } from "@codemirror/state";
+import { frontmatterRange } from "./markdown/frontmatter";
 
 /** What the footer knows about the open document. */
 export interface DocumentStats {
@@ -25,16 +26,20 @@ export function readingMinutes(words: number) {
   return words === 0 ? 0 : Math.max(1, Math.round(words / READING_SPEED));
 }
 
-/** CJK scripts where whitespace does not separate words, so each character counts. */
-const CJK = /[぀-ヿㇰ-ㇿ㐀-䶿一-鿿鿿豈-﫿가-힯]/;
+/**
+ * Scripts written without spaces between words, where each character counts:
+ * kana, and the Han ideographs Chinese and Japanese share. Korean is left out
+ * on purpose - it puts spaces between its words, and is counted by them.
+ */
+const UNSPACED = /[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 
 const HAS_LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
 /**
  * Words in a piece of text.
  *
- * Whitespace splits tokens; inside a token every CJK character counts as its
- * own word, and the rest counts as one word when it carries a letter or a
+ * Whitespace splits tokens; inside a token every kana or Han character counts as
+ * its own word, and the rest counts as one word when it carries a letter or a
  * digit - so `---`, `**` and `|` contribute nothing while `don't` stays one.
  */
 export function countWordsIn(text: string): number {
@@ -44,7 +49,7 @@ export function countWordsIn(text: string): number {
     let cjk = 0;
     let rest = "";
     for (const ch of token) {
-      if (CJK.test(ch)) cjk++;
+      if (UNSPACED.test(ch)) cjk++;
       else rest += ch;
     }
     words += cjk;
@@ -63,6 +68,8 @@ function stripMarkup(line: string): string {
   if (/^\s*(```|~~~)/.test(s)) return "";
   s = s.replace(/^\s*[-*+]\s+\[[ xX]\]\s+/, "");
   s = s.replace(/^\s*\d+[.)]\s+/, "");
+  // A footnote's text is prose; a link reference definition is only a target.
+  s = s.replace(/^\s*\[\^[^\]\n]+\]:\s*/, "");
   if (/^\s*\[[^\]\n]+]:\s+\S+/.test(s)) return "";
   s = s.replace(/!?\[([^\]]*)\]\([^)\n]*\)/g, "$1");
   s = s.replace(/!?\[([^\]]*)\]\[[^\]\n]*\]/g, "$1");
@@ -78,18 +85,12 @@ function lineWords(text: string, lineNumber: number, frontmatterEnd: number): nu
 }
 
 /**
- * The last line of the YAML frontmatter block, or 0 when there is none.
- * The block opens with `---` on line one and closes on a later `---` or
- * `...`; an unclosed opener is treated as ordinary content.
+ * The last line of the properties block, or 0 when there is none - by the
+ * same reading the editor draws it with, so what is counted as prose is what
+ * is shown as prose.
  */
 function frontmatterEnd(doc: Text): number {
-  if (doc.lines < 2 || doc.line(1).text.trim() !== "---") return 0;
-  const limit = Math.min(doc.lines, 500);
-  for (let n = 2; n <= limit; n++) {
-    const trimmed = doc.line(n).text.trim();
-    if (trimmed === "---" || trimmed === "...") return n;
-  }
-  return 0;
+  return frontmatterRange(doc)?.closingLine ?? 0;
 }
 
 /**
@@ -188,15 +189,28 @@ export function recount(before: Text, after: Text, changes: ChangeSet, tally: Wo
   });
   if (toA < 0) return tally;
 
+  // Closing a properties block, or breaking one open, changes what the lines
+  // inside it count for - lines the edit itself never touched - so an edit
+  // that moves where the block ends is counted afresh. One that stays inside
+  // a block it leaves standing changes nothing: none of it is prose.
+  const frontA = frontmatterEnd(before);
+  const frontB = frontmatterEnd(after);
+  const afresh = () => {
+    const { words, paragraphs } = countDocument(after);
+    return { words, paragraphs };
+  };
+  if (frontA !== frontB) return afresh();
+  if (frontA > 0 && before.lineAt(fromA).number <= frontA) {
+    const inside = before.lineAt(toA).number <= frontA && after.lineAt(toB).number <= frontB;
+    return inside ? tally : afresh();
+  }
+
   const firstA = before.lineAt(fromA).number;
   const lastA = Math.min(before.lineAt(toA).number + 1, before.lines);
   const firstB = after.lineAt(fromB).number;
   const lastB = Math.min(after.lineAt(toB).number + 1, after.lines);
 
-  if (lastA - firstA + (lastB - firstB) > RECOUNT_LIMIT) {
-    const { words, paragraphs } = countDocument(after);
-    return { words, paragraphs };
-  }
+  if (lastA - firstA + (lastB - firstB) > RECOUNT_LIMIT) return afresh();
 
   const removed = tallyLines(before, firstA, lastA);
   const added = tallyLines(after, firstB, lastB);

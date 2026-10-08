@@ -92,6 +92,22 @@ describe("CJK text", () => {
   });
 });
 
+describe("scripts that do put spaces between words", () => {
+  test("Korean is counted by its spaces, not by the syllable", () => {
+    expect(count("\uc548\ub155\ud558\uc138\uc694 \uc138\uacc4").words).toBe(2);
+  });
+});
+
+describe("footnotes and reference definitions", () => {
+  test("a footnote's text is prose, its label is not", () => {
+    expect(count("[^1]: three more words").words).toBe(3);
+  });
+
+  test("a link reference definition is only a target", () => {
+    expect(count("[docs]: https://example.com").words).toBe(0);
+  });
+});
+
 describe("frontmatter and paragraphs", () => {
   test("frontmatter does not start or hold a paragraph", () => {
     const doc = count("---\ntitle: x\n---\nfirst paragraph\n\nsecond");
@@ -162,6 +178,58 @@ describe("recount", () => {
         expect(tally).toEqual({ words: full.words, paragraphs: full.paragraphs });
       }
     }
+  });
+
+  // The lines of a properties block count for nothing, and which lines those
+  // are is decided by a `---` that may be nowhere near the edit: closing a
+  // block, or breaking one open, changes the count of lines nobody touched.
+  test("keeps step with a full count as a properties block comes and goes", async () => {
+    const { EditorState } = await import("@codemirror/state");
+    const { recount } = await import("../src/lib/documentStats");
+    const pieces = [
+      "word ",
+      "\n",
+      "---\n",
+      "\n---",
+      "---",
+      "- [ ] ",
+      "| a | b |\n",
+      "\u4f60\u597d",
+      "[x](y z) ",
+      "",
+    ];
+    const start = "---\ntitle: a note\ntags: one two\n---\nfirst line\n\n- [ ] a task\nmore of it\n---\nlast";
+
+    for (const seed of [5, 6, 7, 8, 9, 10]) {
+      const next = random(seed);
+      let state = EditorState.create({ doc: start });
+      let tally = { words: countDocument(state.doc).words, paragraphs: countDocument(state.doc).paragraphs };
+
+      for (let step = 0; step < 400; step++) {
+        const length = state.doc.length;
+        // Half the edits land in the first few lines, where the block is.
+        const reach = next() < 0.5 ? Math.min(length, 40) : length;
+        const from = Math.floor(next() * (reach + 1));
+        const to = Math.min(length, from + Math.floor(next() * 12));
+        const insert = pieces[Math.floor(next() * pieces.length)];
+        const transaction = state.update({ changes: { from, to: next() < 0.5 ? from : to, insert } });
+
+        tally = recount(state.doc, transaction.state.doc, transaction.changes, tally);
+        state = transaction.state;
+
+        const full = countDocument(state.doc);
+        expect(tally).toEqual({ words: full.words, paragraphs: full.paragraphs });
+      }
+    }
+  });
+
+  test("typing inside a properties block leaves the count alone", async () => {
+    const { EditorState } = await import("@codemirror/state");
+    const { recount } = await import("../src/lib/documentStats");
+    const state = EditorState.create({ doc: "---\ntitle: a\n---\nthree words here" });
+    const tally = { words: 3, paragraphs: 1 };
+    const transaction = state.update({ changes: { from: 12, insert: " longer title" } });
+    expect(recount(state.doc, transaction.state.doc, transaction.changes, tally)).toBe(tally);
   });
 
   test("an edit that changes nothing changes nothing", async () => {

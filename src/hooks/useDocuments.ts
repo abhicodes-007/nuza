@@ -37,6 +37,14 @@ const writingSurface: Extension = [
  */
 const COUNT_DELAY = 250;
 
+/**
+ * The longest selection counted as it changes. Dragging one out reports on
+ * every move of the mouse, and counting the words of a selection means going
+ * through all of it - so past this it waits, like the first count of a note,
+ * for the selection to stop moving.
+ */
+const SELECTION_COUNT_LIMIT = 20_000;
+
 /** Settings that change while the app is running: the font, and Vim mode. */
 const preferences = new Compartment();
 /** The open note's own directory, which its relative image paths resolve against. */
@@ -169,21 +177,26 @@ export function useDocuments({
    * characters stand in for the document's, and the document's paragraphs
    * carry on either way. Shared by the debounced count and the per-edit
    * report so neither can publish the other's shape.
+   *
+   * A long selection's words are only counted when `settled` - until then the
+   * number already showing is left where it is.
    */
-  const statsPartial = useCallback((state: EditorState) => {
+  const statsPartial = useCallback((state: EditorState, settled = false) => {
     const counted = tally.current?.doc === state.doc ? tally.current : null;
-    const selection = state.selection.main;
-    const selected = selection.empty
-      ? null
-      : countSelection(state.doc.sliceString(selection.from, selection.to));
+    const { from, to, empty } = state.selection.main;
+    if (empty) {
+      return {
+        ...(counted && { words: counted.words, paragraphs: counted.paragraphs }),
+        characters: state.doc.length,
+      };
+    }
+
+    const selected =
+      settled || to - from <= SELECTION_COUNT_LIMIT ? countSelection(state.doc.sliceString(from, to)) : null;
     return {
       ...(counted && { paragraphs: counted.paragraphs }),
-      ...(selected
-        ? { words: selected.words, characters: selected.characters }
-        : {
-            ...(counted && { words: counted.words }),
-            characters: state.doc.length,
-          }),
+      ...(selected && { words: selected.words }),
+      characters: to - from,
     };
   }, []);
 
@@ -193,9 +206,13 @@ export function useDocuments({
       countTimer.current = null;
       const state = editor.current?.state;
       if (!state) return;
-      const { words, paragraphs } = countDocument(state.doc);
-      tally.current = { doc: state.doc, words, paragraphs };
-      publish({ ...latestStats.current, ...statsPartial(state) });
+      // Asked for by a long selection as well as by a note with no count yet,
+      // and only the second of those needs the note counted again.
+      if (tally.current?.doc !== state.doc) {
+        const { words, paragraphs } = countDocument(state.doc);
+        tally.current = { doc: state.doc, words, paragraphs };
+      }
+      publish({ ...latestStats.current, ...statsPartial(state, true) });
     }, COUNT_DELAY);
   }, [publish, statsPartial]);
 
@@ -211,8 +228,10 @@ export function useDocuments({
         column: head - line.from + 1,
       });
       // A document with no count yet - one just swapped in - is counted in
-      // full once things settle.
-      if (!counted) scheduleCount();
+      // full once things settle, and so is a selection too long to count on
+      // every move of it.
+      const { from, to } = state.selection.main;
+      if (!counted || to - from > SELECTION_COUNT_LIMIT) scheduleCount();
     },
     [publish, scheduleCount, statsPartial]
   );
