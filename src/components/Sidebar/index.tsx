@@ -129,7 +129,7 @@ function Sidebar({
   const treeRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const hasFolder = !!data && data.length > 0 && !!rootPath;
+  const hasFolder = !!rootPath;
 
   // File names are matched as words; a pattern is not a name, so with one
   // there are no file matches, only the lines it finds.
